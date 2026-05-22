@@ -1,0 +1,37 @@
+{
+  "name": "ZD Config Transfer",
+  "author": {
+    "name": "zd-transfer maintainers",
+    "email": "noreply@example.com"
+  },
+  "defaultLocale": "en",
+  "private": true,
+  "frameworkVersion": "2.0",
+  "version": "0.1.0",
+  "location": {
+    "support": {
+      "nav_bar": {
+        "url": "assets/iframe.html",
+        "flexible": true
+      }
+    }
+  },
+  "parameters": [
+    {
+      "name": "backend_url",
+      "type": "text",
+      "required": true,
+      "secure": false,
+      "default": "http://localhost:8080",
+      "label": "Backend URL — points to your self-hosted zd-transfer Docker stack."
+    },
+    {
+      "name": "backend_secret",
+      "type": "text",
+      "required": true,
+      "secure": true,
+      "label": "Backend HMAC secret — must match ZDX_HMAC_SECRET on the backend."
+    }
+  ],
+  "domainWhitelist": []
+}

@@ -1,0 +1,59 @@
+# -------------------------------------------------------
+# SECURITY: Never commit real credentials to version control
+# -------------------------------------------------------
+
+# Credential files (contain API tokens / secrets)
+config/source.env
+config/target.env
+docker/.env
+source
+
+# Migration state (contains internal IDs — not sensitive, but large)
+/state/
+
+# Backup snapshots (large, contain PII)
+/backups/
+
+# Raw exports (may contain PII from organizations/users)
+/exports/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Node / UI
+ui/node_modules/
+ui/dist/
+ui/assets/app-*
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.claude/
+
+# Environment files
+*.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Internal planning docs (not for production)
+documentation.md
+information.md
+implementation_plan.md

@@ -1,0 +1,38 @@
+# Keep the build context small and reproducible.
+
+.git
+.gitignore
+.venv
+.vscode
+.idea
+.claude
+
+# Local CLI state — never bake operator data into the image.
+state/**
+exports/**
+backups/**
+config/*.env
+*.env
+
+# Build artifacts
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+
+# UI lives in its own image; backend doesn't need node_modules.
+ui/node_modules
+ui/assets/app-*.js
+ui/assets/app-*.js.map
+ui/assets/chunk-*.js
+ui/assets/asset-*
+
+# Tests aren't shipped in the image, but pytest results clutter the
+# context if cached locally.
+.pytest_cache
+.coverage
+htmlcov
+
+# Editor / OS noise
+*.swp
+.DS_Store

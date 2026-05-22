@@ -1,0 +1,187 @@
+# =============================================================================
+#  zd-transfer — Truly Automated Setup for Windows (PowerShell)
+#  =============================================================================
+#  This script installs everything needed to run the Zendesk Configuration
+#  Transfer tool, including Docker Desktop, Python, and the Docker Compose
+#  stack. Run this in PowerShell as Administrator once after cloning the repo.
+#
+#  Usage:
+#    Right-click → "Run with PowerShell" (as Administrator)
+#    OR:
+#    powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
+# =============================================================================
+
+$ErrorActionPreference = "Stop"
+$ROOT = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+Set-Location $ROOT
+
+function Write-Info  { Write-Host "[INFO]  $args" -ForegroundColor Cyan }
+function Write-Ok    { Write-Host "[OK]    $args" -ForegroundColor Green }
+function Write-Warn  { Write-Host "[WARN]  $args" -ForegroundColor Yellow }
+function Write-Crit  { Write-Host "[ERROR] $args" -ForegroundColor Red }
+
+# Determine the docker command (account for possible alias or PATH issues)
+$DOCKER_CMD = "docker"
+
+# ------------------------------------------------------------------
+#  1. Docker Desktop
+# ------------------------------------------------------------------
+Write-Info "Checking Docker Desktop..."
+$docker = Get-Command docker -ErrorAction SilentlyContinue
+if ($docker) {
+    $ver = docker --version
+    Write-Ok "Docker already installed: $ver"
+} else {
+    Write-Info "Docker Desktop not found. Downloading..."
+    $installer = "$env:TEMP\DockerDesktopInstaller.exe"
+    Invoke-WebRequest -Uri "https://desktop.docker.com/win/stable/Docker%20Desktop%20Installer.exe" -OutFile $installer
+    Write-Info "Running Docker Desktop installer..."
+    Start-Process -Wait -FilePath $installer -ArgumentList "install", "--accept-license", "--quiet"
+    Write-Ok "Docker Desktop installed. You may need to restart your computer."
+    Write-Info "After restart, ensure Docker Desktop is running before proceeding."
+}
+
+# ------------------------------------------------------------------
+#  2. Docker Compose
+# ------------------------------------------------------------------
+Write-Info "Checking Docker Compose..."
+try {
+    $composeVer = & $DOCKER_CMD compose version
+    Write-Ok "Docker Compose available: $composeVer"
+} catch {
+    Write-Warn "Docker Compose not found as Docker plugin."
+    Write-Warn "Please install Docker Desktop 4.0+ which includes Compose v2."
+}
+
+# ------------------------------------------------------------------
+#  3. Python 3.10+
+# ------------------------------------------------------------------
+Write-Info "Checking Python..."
+$python = Get-Command python -ErrorAction SilentlyContinue
+if (-not $python) {
+    Write-Info "Python not found. Downloading Python 3.12..."
+    $installer = "$env:TEMP\python-installer.exe"
+    Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.9/python-3.12.9-amd64.exe" -OutFile $installer
+    Start-Process -Wait -FilePath $installer -ArgumentList "/quiet", "InstallAllUsers=1", "PrependPath=1"
+    # Refresh PATH
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+    Write-Ok "Python 3.12 installed"
+} else {
+    $ver = python --version
+    Write-Ok "Python $ver — OK"
+}
+
+# ------------------------------------------------------------------
+#  4. Python virtual environment
+# ------------------------------------------------------------------
+Write-Info "Setting up Python virtual environment..."
+if (-not (Test-Path ".venv")) {
+    python -m venv .venv
+}
+& .\.venv\Scripts\Activate.ps1
+Write-Info "Installing Python dependencies..."
+python -m pip install -q --upgrade pip
+pip install -q -r requirements.txt
+Write-Ok "Python dependencies installed"
+
+# ------------------------------------------------------------------
+#  5. Config .env files
+# ------------------------------------------------------------------
+Write-Info "Setting up configuration files..."
+if (-not (Test-Path "config\source.env")) {
+    Copy-Item config\source.env.example config\source.env
+    Write-Info "  Created config\source.env from template"
+} else {
+    Write-Info "  config\source.env already exists — keeping existing"
+}
+
+if (-not (Test-Path "config\target.env")) {
+    Copy-Item config\target.env.example config\target.env
+    Write-Info "  Created config\target.env from template"
+} else {
+    Write-Info "  config\target.env already exists — keeping existing"
+}
+
+# ------------------------------------------------------------------
+#  6. Generate Docker secrets
+# ------------------------------------------------------------------
+Write-Info "Generating cryptographic secrets..."
+# Generate HMAC secret using Python
+$hmacSecret = python -c "import secrets; print(secrets.token_hex(32))"
+$fernetKey = python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+if (-not (Test-Path "docker\.env")) {
+    Copy-Item docker\.env.example docker\.env
+    Write-Info "  Created docker\.env from template"
+}
+
+$dockerEnv = Get-Content "docker\.env" -Raw
+if ($dockerEnv -match "change_me") {
+    $dockerEnv = $dockerEnv -replace "ZDX_HMAC_SECRET=.*", "ZDX_HMAC_SECRET=$hmacSecret"
+    $dockerEnv = $dockerEnv -replace "ZDX_FERNET_KEY=.*", "ZDX_FERNET_KEY=$fernetKey"
+    Set-Content "docker\.env" -Value $dockerEnv
+    Write-Ok "Docker secrets generated and written to docker\.env"
+} else {
+    Write-Info "  docker\.env already has secrets — keeping existing"
+}
+
+# ------------------------------------------------------------------
+#  7. Create required directories
+# ------------------------------------------------------------------
+New-Item -ItemType Directory -Force -Path state, exports, backups | Out-Null
+
+# ------------------------------------------------------------------
+#  8. Build and start Docker stack
+# ------------------------------------------------------------------
+Write-Info "Building and starting Docker containers..."
+Write-Info "  (This may take a few minutes the first time)..."
+& $DOCKER_CMD compose -f docker\docker-compose.yml --env-file docker\.env up -d --build
+Write-Ok "Docker stack is running"
+
+# ------------------------------------------------------------------
+#  9. Verify health
+# ------------------------------------------------------------------
+Write-Info "Waiting for backend to become healthy..."
+$healthy = $false
+for ($i = 0; $i -lt 30; $i++) {
+    try {
+        $response = Invoke-WebRequest -Uri "http://localhost:8080/api/v1/health" -UseBasicParsing -TimeoutSec 2
+        if ($response.StatusCode -eq 200) {
+            Write-Ok "Backend is healthy at http://localhost:8080"
+            $healthy = $true
+            break
+        }
+    } catch {
+        # Not ready yet
+    }
+    Start-Sleep -Seconds 2
+}
+if (-not $healthy) {
+    Write-Warn "Backend health check timed out. Check logs: $DOCKER_CMD compose -f docker\docker-compose.yml logs backend"
+}
+
+# ------------------------------------------------------------------
+#  Summary
+# ------------------------------------------------------------------
+Write-Host ""
+Write-Host "╔══════════════════════════════════════════════════════════╗" -ForegroundColor Green
+Write-Host "║  zd-transfer — Setup Complete!                          ║" -ForegroundColor Green
+Write-Host "╚══════════════════════════════════════════════════════════╝" -ForegroundColor Green
+Write-Host ""
+Write-Host "  CLI usage:" -ForegroundColor Cyan
+Write-Host "    .\.venv\Scripts\Activate.ps1"
+Write-Host "    python main.py pre-flight"
+Write-Host ""
+Write-Host "  Web UI:" -ForegroundColor Cyan
+Write-Host "    Open http://localhost:8080/ in your browser"
+Write-Host ""
+Write-Host "  Docker commands:" -ForegroundColor Cyan
+Write-Host "    $DOCKER_CMD compose -f docker\docker-compose.yml logs -f backend"
+Write-Host "    $DOCKER_CMD compose -f docker\docker-compose.yml down"
+Write-Host ""
+Write-Host "  Next steps:" -ForegroundColor Yellow
+Write-Host "    1. Edit config\source.env with your source Zendesk credentials"
+Write-Host "    2. Edit config\target.env with your target Zendesk credentials"
+Write-Host "    3. Run: python main.py pre-flight"
+Write-Host "    4. Run: python main.py migrate"
+Write-Host ""

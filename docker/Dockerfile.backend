@@ -1,0 +1,58 @@
+# Multi-stage build:
+#   Stage 1 — node:20 builds the React/Vite UI bundle.
+#   Stage 2 — python:3.12-slim runs the FastAPI backend and serves
+#             the static UI from /app/ui-dist/.
+#
+# The same image is used for both the `backend` and `worker` compose
+# services; the worker just overrides CMD.
+
+# ---- Stage 1: build the UI ---------------------------------------- #
+FROM node:20-slim AS ui-builder
+
+WORKDIR /ui
+
+# Lockfile-backed install keeps image builds reproducible.
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci --no-fund --no-audit
+
+# Build the UI bundle once for the runtime image.
+COPY ui/ ./
+RUN npx tsc --noEmit && npx vite build
+
+# ---- Stage 2: Python runtime -------------------------------------- #
+FROM python:3.12-slim AS runtime
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    ZDX_HOST=0.0.0.0 \
+    ZDX_PORT=8080 \
+    ZDX_UI_DIR=/app/ui-dist
+
+# Install Python deps before copying app source so the layer is cached
+# across code-only changes.
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Copy only the runtime code needed by the backend/worker image.
+COPY server/ /app/server/
+COPY src/ /app/src/
+COPY main.py /app/main.py
+
+# Copy the built UI bundle from the build stage.
+COPY --from=ui-builder /ui/assets /app/ui-dist
+
+# Create a dedicated runtime user and owned writable directories.
+RUN useradd --system --create-home --uid 10001 --user-group --shell /usr/sbin/nologin app \
+    && mkdir -p /app/state /app/exports /app/backups /tmp/zdx \
+    && chown -R app:app /app /tmp/zdx
+USER app
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 CMD \
+    ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=2)"]
+
+CMD ["python", "-m", "uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8080"]

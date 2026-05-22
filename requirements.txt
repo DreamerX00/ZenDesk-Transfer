@@ -1,0 +1,12 @@
+requests>=2.31.0
+python-dotenv>=1.0.0
+rich>=13.7.0
+
+# --- HTTP service (Phase B). All optional — the CLI works without these. ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+rq>=1.16.0
+redis>=5.0.0
+sse-starlette>=2.1.0
+cryptography>=42.0.0
+pydantic>=2.7.0

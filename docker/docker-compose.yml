@@ -1,0 +1,93 @@
+# Single-host deployment of zd-transfer.
+#
+# Three services:
+#   redis    — RQ broker + event bus
+#   backend  — FastAPI on :8080 (exposed)
+#   worker   — RQ consumer (no ports)
+#
+# The Zendesk app talks only to `backend`. Redis and the worker remain
+# internal to the compose network.
+
+name: zd-transfer
+
+x-app-image: &app-image
+  image: ${ZDX_IMAGE_NAME:-zd-transfer-backend}:${ZDX_IMAGE_TAG:-latest}
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.backend
+
+x-app-common: &app-common
+  <<: *app-image
+  restart: unless-stopped
+  init: true
+  stop_grace_period: 30s
+  user: "${ZDX_RUN_UID:-1000}:${ZDX_RUN_GID:-1000}"
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  read_only: true
+  environment: &app-env
+    ZDX_REDIS_URL: redis://redis:6379/0
+    ZDX_QUEUE_NAME: ${ZDX_QUEUE_NAME:-zd-transfer}
+    ZDX_JOB_TIMEOUT_S: ${ZDX_JOB_TIMEOUT_S:-21600}
+    ZDX_HMAC_SECRET: ${ZDX_HMAC_SECRET:?ZDX_HMAC_SECRET is required}
+    ZDX_FERNET_KEY: ${ZDX_FERNET_KEY:?ZDX_FERNET_KEY is required}
+    ZDX_REQUIRE_HMAC: "1"
+    ZDX_DEV_MODE: "0"
+    ZDX_STATE_ROOT: /app/state
+    ZDX_CONNECTIONS_PATH: /app/state/connections.enc
+  volumes: &app-volumes
+    - ${ZDX_STATE_DIR:-../state}:/app/state
+    - ${ZDX_EXPORTS_DIR:-../exports}:/app/exports
+    - ${ZDX_BACKUPS_DIR:-../backups}:/app/backups
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    <<: *app-common
+    ports:
+      - "${ZDX_BIND:-127.0.0.1}:8080:8080"
+    environment:
+      <<: *app-env
+      ZDX_BACKEND_URL: ${ZDX_BACKEND_URL:-http://localhost:8080}
+      ZDX_CORS_ORIGINS: ${ZDX_CORS_ORIGINS:-}
+      ZDX_STANDALONE_MODE: ${ZDX_STANDALONE_MODE:-0}
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    <<: *app-common
+    command: ["rq", "worker", "--url", "redis://redis:6379/0", "${ZDX_QUEUE_NAME:-zd-transfer}"]
+    healthcheck:
+      disable: true
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis-data:
