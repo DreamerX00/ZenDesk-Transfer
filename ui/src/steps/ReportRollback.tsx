@@ -23,6 +23,8 @@ marked.setOptions({
 });
 
 type OpTab = "report" | "cleanup" | "rollback" | "restore" | "history";
+const REPORT_RETRY_DELAY_MS = 1500;
+const REPORT_MAX_RETRIES = 8;
 
 export function ReportRollback() {
   const setStep = useStore((s) => s.setStep);
@@ -35,22 +37,72 @@ export function ReportRollback() {
   const [loading, setLoading] = useState(true);
   const [opTab, setOpTab] = useState<OpTab>("report");
   const [parseErr, setParseErr] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     if (!migrationId) {
+      setReport(null);
+      setErr(null);
+      setParseErr(null);
       setLoading(false);
       return;
     }
+    let cancelled = false;
+    let timer: number | null = null;
+    let attempts = 0;
+
+    setLoading(true);
+    setErr(null);
+    setReport(null);
     setParseErr(null);
-    void (async () => {
+    setRetryCount(0);
+
+    const load = async () => {
       try {
-        setReport(await getReport(migrationId));
+        const next = await getReport(migrationId);
+        if (cancelled) {
+          return;
+        }
+        if (!next.trim() && attempts < REPORT_MAX_RETRIES) {
+          attempts += 1;
+          setRetryCount(attempts);
+          timer = window.setTimeout(() => {
+            void load();
+          }, REPORT_RETRY_DELAY_MS);
+          return;
+        }
+        setReport(next);
+        setErr(next.trim() ? null : "Report file is empty.");
       } catch (error) {
-        setErr(error instanceof Error ? error.message : String(error));
+        if (cancelled) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        if (shouldRetryReportFetch(message) && attempts < REPORT_MAX_RETRIES) {
+          attempts += 1;
+          setRetryCount(attempts);
+          timer = window.setTimeout(() => {
+            void load();
+          }, REPORT_RETRY_DELAY_MS);
+          return;
+        }
+        setErr(message);
       } finally {
+        if (cancelled || timer !== null) {
+          return;
+        }
         setLoading(false);
       }
-    })();
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
   }, [migrationId]);
 
   const [sanitisedHtml, setSanitisedHtml] = useState("");
@@ -99,9 +151,25 @@ export function ReportRollback() {
           <div className="zd-status-pill zd-status-pill--neutral">Loading report</div>
           <h3>Fetching verify output</h3>
           <p style={{ marginBottom: 0 }}>
-            Pulling the report from the backend host so it can be reviewed in
-            this control center.
+            {retryCount > 0
+              ? "The backend finished the run, and the UI is waiting for the report file to become readable."
+              : "Pulling the report from the backend host so it can be reviewed in this control center."}
           </p>
+        </div>
+      ) : null}
+
+      {!loading && !migrationId ? (
+        <div className="zd-empty-state">
+          <h3>No active report selected</h3>
+          <p>
+            There is no current migration ID in the active session. Open a past
+            run from history to view its report.
+          </p>
+          <div className="zd-inline-actions" style={{ marginTop: 16 }}>
+            <button onClick={() => setOpTab("history")} style={btn("secondary")} type="button">
+              Open history
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -114,6 +182,11 @@ export function ReportRollback() {
               there may be no report to fetch.
             </p>
           ) : null}
+          <div className="zd-inline-actions" style={{ marginTop: 12 }}>
+            <button onClick={() => setOpTab("history")} style={btn("secondary")} type="button">
+              Browse history instead
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -661,4 +734,9 @@ function statusPillClass(phase: string): string {
   if (phase === "failed") return "zd-status-pill--danger";
   if (phase === "cancelled") return "zd-status-pill--warning";
   return "zd-status-pill--neutral";
+}
+
+function shouldRetryReportFetch(message: string): boolean {
+  const text = message.toLowerCase();
+  return text.includes("report not found yet") || text.includes("report not found");
 }
