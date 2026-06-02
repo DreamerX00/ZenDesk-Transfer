@@ -115,15 +115,52 @@ if (-not (Test-Path "docker\.env")) {
     Write-Info "  Created docker\.env from template"
 }
 
+function Set-EnvValue {
+    param(
+        [string]$Content,
+        [string]$Key,
+        [string]$Value
+    )
+
+    if ($Content -match "(?m)^$Key=") {
+        return [System.Text.RegularExpressions.Regex]::Replace(
+            $Content,
+            "(?m)^$Key=.*$",
+            "$Key=$Value"
+        )
+    }
+
+    if (-not $Content.EndsWith("`n")) {
+        $Content += "`r`n"
+    }
+    return $Content + "$Key=$Value`r`n"
+}
+
 $dockerEnv = Get-Content "docker\.env" -Raw
-if ($dockerEnv -match "change_me") {
-    $dockerEnv = $dockerEnv -replace "ZDX_HMAC_SECRET=.*", "ZDX_HMAC_SECRET=$hmacSecret"
-    $dockerEnv = $dockerEnv -replace "ZDX_FERNET_KEY=.*", "ZDX_FERNET_KEY=$fernetKey"
+$currentHmac = [System.Text.RegularExpressions.Regex]::Match($dockerEnv, "(?m)^ZDX_HMAC_SECRET=(.*)$").Groups[1].Value.Trim()
+$currentFernet = [System.Text.RegularExpressions.Regex]::Match($dockerEnv, "(?m)^ZDX_FERNET_KEY=(.*)$").Groups[1].Value.Trim()
+$updatedSecrets = $false
+
+if ([string]::IsNullOrWhiteSpace($currentHmac) -or $currentHmac -eq "change_me") {
+    $dockerEnv = Set-EnvValue -Content $dockerEnv -Key "ZDX_HMAC_SECRET" -Value $hmacSecret
+    $updatedSecrets = $true
+}
+if ([string]::IsNullOrWhiteSpace($currentFernet) -or $currentFernet -eq "change_me") {
+    $dockerEnv = Set-EnvValue -Content $dockerEnv -Key "ZDX_FERNET_KEY" -Value $fernetKey
+    $updatedSecrets = $true
+}
+
+if ($updatedSecrets) {
     Set-Content "docker\.env" -Value $dockerEnv
     Write-Ok "Docker secrets generated and written to docker\.env"
 } else {
     Write-Info "  docker\.env already has secrets — keeping existing"
 }
+
+$dockerEnv = Get-Content "docker\.env" -Raw
+$dockerEnv = Set-EnvValue -Content $dockerEnv -Key "ZDX_STANDALONE_MODE" -Value "1"
+Set-Content "docker\.env" -Value $dockerEnv
+Write-Ok "Configured ZDX_STANDALONE_MODE=1 for local browser access"
 
 # ------------------------------------------------------------------
 #  7. Create required directories

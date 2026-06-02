@@ -180,6 +180,26 @@ ensure_secret() {
 ensure_secret "ZDX_HMAC_SECRET" "openssl rand -hex 32"
 ensure_secret "ZDX_FERNET_KEY" "$PYTHON -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
 
+ensure_env_value() {
+    local key="$1"
+    local value="$2"
+    local file="docker/.env"
+    local current_val
+    current_val=$(grep "^${key}=" "$file" | cut -d '=' -f2- || true)
+    if [ "$current_val" = "$value" ]; then
+        log_info "${key} already set to ${value}."
+        return
+    fi
+    grep -v "^${key}=" "$file" > "${file}.tmp" || true
+    mv "${file}.tmp" "$file"
+    echo "${key}=${value}" >> "$file"
+    log_ok "Configured ${key}=${value}"
+}
+
+# This setup path opens the bundled UI directly in a browser tab, so
+# standalone mode must be enabled for the first boot to succeed.
+ensure_env_value "ZDX_STANDALONE_MODE" "1"
+
 # ------------------------------------------------------------------
 #  7. Create required directories
 # ------------------------------------------------------------------

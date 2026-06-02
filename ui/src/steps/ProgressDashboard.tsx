@@ -1,93 +1,69 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cancelJob, getJobStatus, listBackups, startCleanup, startRestore, startRollback } from "../api/backend";
 import { playError, playSuccess } from "../sound";
 import { useStore } from "../state/store";
 import { useToast } from "../toasts";
 import type { LogRecord } from "../types";
 import { btn } from "./PreFlight";
+import { computeEstimate, formatDuration } from "./progressEstimate";
 
 const POLL_INTERVAL_MS = 2000;
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const STARTUP_PHASES = new Set(["", "starting", "idle"]);
 
-// Estimated time per resource item (seconds), calibrated from observed
-// Zendesk API latency. These account for: HTTP round-trip, Zendesk
-// server processing, rate-limit pacing (the token-bucket throttle),
-// and payload serialisation.  A single create takes ~0.6-1.2 s in
-// practice; we use conservative upper-bound estimates so the bar
-// doesn't prematurely show "overdue".
-const RESOURCE_COST_SEC: Record<string, number> = {
-  "groups":               0.8,
-  "brands":               1.8,  // brand_url creation is slow
-  "ticket_fields":        2.0,  // complex payload, multiple sub-calls
-  "user_fields":          1.0,
-  "organization_fields":  1.0,
-  "custom_roles":         1.0,
-  "ticket_forms":         1.5,
-  "organizations":        1.0,
-  "views":                1.2,
-  "triggers":             1.0,
-  "automations":          1.0,
-  "macros":               1.0,
-  "sla_policies":         1.2,
-  "group_sla_policies":   1.2,
-  "schedules":            1.0,
-  "routing_attributes":   1.0,
-  "dynamic_content_items": 1.0,
-  "webhooks":             2.0,  // ZIS-backed, higher latency
-  "categories":           1.5,  // HC parent object
-  "sections":             1.0,
-  "articles":             3.0,  // large payload, translation expansion
-  "user_segments":        0.8,
-  "users":                0.5,
+// UI keeps phases as numbers (1-5); the worker uses descriptive names.
+// Mirrors the order in server/jobs.py:run_full_migration so the ETA
+// can skip phases the operator didn't select.
+const PHASE_NUM_TO_NAME: Record<number, string> = {
+  1: "1-foundation",
+  2: "2-business-logic",
+  3: "3-content",
+  4: "4-verify",
+  5: "5-users",
 };
-
-// Which resource keys belong to each phase.
-const PHASE_RESOURCES: Record<string, string[]> = {
-  "extract":              ["groups", "brands", "ticket_fields", "user_fields", "organization_fields", "custom_roles", "ticket_forms", "organizations", "views", "triggers", "automations", "macros", "sla_policies", "group_sla_policies", "schedules", "routing_attributes", "dynamic_content_items", "webhooks", "categories", "sections", "articles", "user_segments", "users"],
-  "format-target":        [],
-  "1-foundation":         ["groups", "brands", "ticket_fields", "user_fields", "organization_fields", "custom_roles", "ticket_forms", "organizations"],
-  "2-business-logic":     ["views", "triggers", "automations", "macros", "sla_policies", "group_sla_policies", "schedules", "routing_attributes", "dynamic_content_items", "webhooks"],
-  "3-content":            ["categories", "sections", "articles", "user_segments"],
-  "4-verify":             [],
-  "5-users":              ["users"],
-};
-
-function fmtDuration(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
-}
-
-/** Estimate how many seconds a phase will take based on extracted resource counts. */
-function estimatePhase(phase: string, status: Record<string, string>): number {
-  const perPhase = PHASE_RESOURCES[phase];
-  if (!perPhase || perPhase.length === 0) return 30; // minimal overhead
-  let total = 5;  // base overhead per phase
-  for (const rkey of perPhase) {
-    const raw = status[`extracted_${rkey}`];
-    const count = raw ? parseInt(raw, 10) : 0;
-    if (count > 0) {
-      total += count * (RESOURCE_COST_SEC[rkey] ?? 1.0);
-    }
-  }
-  return Math.max(total, 10);
-}
 
 export function ProgressDashboard() {
   const setStep = useStore((s) => s.setStep);
   const migrationId = useStore((s) => s.currentMigrationId);
+  const targetConnectionId = useStore((s) => s.targetConnectionId);
   const eventTail = useStore((s) => s.eventTail);
   const setEventTail = useStore((s) => s.setEventTail);
   const jobStatus = useStore((s) => s.jobStatus);
   const setJobStatus = useStore((s) => s.setJobStatus);
+  const selectedPhases = useStore((s) => s.selectedPhases);
 
   const notify = useToast();
   const [err, setErr] = useState<string | null>(null);
   const stop = useRef(false);
   const lastPhase = useRef<string>("");
   const [now, setNow] = useState(Date.now());
+
+  // The estimate is honest about what it knows: total elapsed,
+  // per-phase elapsed, and ETA only when there's enough throughput
+  // signal to justify a number. See progressEstimate.ts for the math.
+  const selectedPhaseNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const n of selectedPhases) {
+      const name = PHASE_NUM_TO_NAME[n];
+      if (name) names.add(name);
+    }
+    // "extract" and "format-target" always run conditionally inside the
+    // worker, not via the selectedPhases list; treat them as included
+    // for ETA purposes so they're counted in remaining-weight.
+    if (jobStatus.format_target === "True") names.add("format-target");
+    names.add("extract");
+    return names;
+  }, [selectedPhases, jobStatus.format_target]);
+
+  const estimate = useMemo(
+    () => computeEstimate({
+      status: jobStatus,
+      events: eventTail,
+      now,
+      selectedPhases: selectedPhaseNames,
+    }),
+    [jobStatus, eventTail, now, selectedPhaseNames],
+  );
 
   // Live clock tick — re-renders every second so the elapsed timer
   // advances smoothly.
@@ -185,22 +161,44 @@ export function ProgressDashboard() {
             <dd>{phase}</dd>
           </div>
           <div className="zd-summary-item">
-            <dt>Events captured</dt>
+            <dt>Events</dt>
             <dd>{eventTail.length}</dd>
           </div>
-          <div className="zd-summary-item">
-            <dt>Duration</dt>
+          <div className="zd-summary-item" title="Wall-clock time since the worker picked up this job.">
+            <dt>Elapsed</dt>
+            <dd>{formatDuration(estimate.totalElapsedSec)}</dd>
+          </div>
+          <div className="zd-summary-item" title="Wall-clock time since the current phase started.">
+            <dt>This phase</dt>
+            <dd>{formatDuration(estimate.phaseElapsedSec)}</dd>
+          </div>
+          <div className="zd-summary-item" title={
+            estimate.reason ??
+            (estimate.itemsPerSec
+              ? `Based on ${estimate.itemsPerSec.toFixed(2)} items/sec observed in this phase.`
+              : "")
+          }>
+            <dt>ETA remaining</dt>
             <dd>
-              <PhaseTimer
-                phase={phase}
-                startedAt={jobStatus.phase_started_at ?? null}
-                now={now}
-                isTerminal={isTerminal}
-                status={jobStatus}
-              />
+              {isTerminal ? (
+                phase === "completed" ? "Done" : phase
+              ) : estimate.etaSec === null ? (
+                <span style={{ color: "#5d787f", fontStyle: "italic" }}>
+                  {estimate.reason ?? "Estimating…"}
+                </span>
+              ) : (
+                formatDuration(estimate.etaSec)
+              )}
             </dd>
           </div>
         </div>
+
+        {!isTerminal && estimate.etaSec !== null && estimate.phaseElapsedSec !== null ? (
+          <ProgressBar
+            elapsed={estimate.totalElapsedSec ?? 0}
+            remaining={estimate.etaSec}
+          />
+        ) : null}
       </div>
 
       <Counters status={jobStatus} />
@@ -231,7 +229,7 @@ export function ProgressDashboard() {
 
         {isTerminal ? (
           <DashboardOperations
-            targetConnectionId={useStore((s) => s.targetConnectionId)}
+            targetConnectionId={targetConnectionId}
             setStep={setStep}
           />
         ) : null}
@@ -309,50 +307,52 @@ function EventTail({ records }: { records: LogRecord[] }) {
   );
 }
 
-function PhaseTimer({
-  phase,
-  startedAt,
-  now,
-  isTerminal,
-  status,
-}: {
-  phase: string;
-  startedAt: string | null;
-  now: number;
-  isTerminal: boolean;
-  status: Record<string, string>;
-}) {
-  const estimate = estimatePhase(phase, status);
-
-  if (!startedAt) {
-    return <span>— / {fmtDuration(estimate)}</span>;
-  }
-
-  const elapsedMs = now - new Date(startedAt).getTime();
-  const elapsedSec = Math.max(0, elapsedMs / 1000);
-  const pct = Math.min(100, Math.round((elapsedSec / estimate) * 100));
-
-  let barColor = "#84edc1";
-  if (pct > 100) barColor = "#ffb3c0";
-  else if (pct > 80) barColor = "#ffd982";
-
+/**
+ * Honest progress bar.
+ *
+ * The denominator is `elapsed + remaining` — both numbers come from
+ * the same estimate, so the bar can't drift past 100 % while ETA is
+ * being computed. When ETA shrinks (we're going faster than the
+ * baseline), the bar accelerates; when it grows, the bar slows. We
+ * never display this when ETA is null — the parent decides that.
+ */
+function ProgressBar({ elapsed, remaining }: { elapsed: number; remaining: number }) {
+  const total = elapsed + remaining;
+  const pct = total > 0 ? Math.min(100, Math.max(0, (elapsed / total) * 100)) : 0;
   return (
-    <span title={`Elapsed: ${fmtDuration(elapsedSec)}  |  Estimated: ${fmtDuration(estimate)}`}
-          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-      <span>{fmtDuration(elapsedSec)} / {fmtDuration(estimate)}</span>
-      {!isTerminal ? (
-        <span style={{
-          display: "inline-block", width: 48, height: 6, borderRadius: 3,
-          background: "rgba(215, 226, 223, 0.4)", overflow: "hidden",
-        }}>
-          <span style={{
-            display: "block", height: "100%", width: `${Math.min(pct, 100)}%`,
-            background: barColor, borderRadius: 3,
-            transition: "width 1s ease, background 0.5s ease",
-          }} />
-        </span>
-      ) : null}
-    </span>
+    <div style={{ marginTop: 12 }}>
+      <div
+        style={{
+          height: 8,
+          borderRadius: 4,
+          background: "rgba(215, 226, 223, 0.45)",
+          overflow: "hidden",
+        }}
+        role="progressbar"
+        aria-valuenow={Math.round(pct)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label="Migration progress"
+      >
+        <div
+          style={{
+            height: "100%",
+            width: `${pct}%`,
+            background: pct >= 95 ? "#ffd982" : "#84edc1",
+            borderRadius: 4,
+            transition: "width 800ms ease, background 600ms ease",
+          }}
+        />
+      </div>
+      <div style={{
+        display: "flex", justifyContent: "space-between", marginTop: 6,
+        fontSize: 12, color: "#5d787f",
+      }}>
+        <span>{formatDuration(elapsed)} elapsed</span>
+        <span>{Math.round(pct)} %</span>
+        <span>{formatDuration(remaining)} remaining</span>
+      </div>
+    </div>
   );
 }
 
