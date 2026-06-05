@@ -145,11 +145,50 @@ def _remap_condition_item(obj: Dict, id_map: Dict,
     """
     Remap a condition/action item like {"field": "group_id", "value": "12345"}.
     The 'value' is remapped based on the 'field' name.
+
+    Also handles custom_fields_<id> in the 'field' key — the embedded ticket
+    field ID must be remapped from the source ID to the target ID, otherwise
+    the condition/action references a non-existent field on the target and is
+    silently ignored by Zendesk (causing triggers to fire incorrectly).
+
     Returns the remapped dict, or None if the condition must be removed
     (e.g. user references that can't be migrated).
     """
     field = obj.get("field", "")
     value = obj.get("value")
+
+    # --- Handle custom_fields_<id> in the field key (ticket field ID remap) --- #
+    # Conditions/actions like {"field": "custom_fields_360012345678", ...}
+    # embed the ticket field ID in the field name itself. This ID must be
+    # remapped to the target's equivalent, otherwise the whole condition
+    # silently fails and the trigger fires incorrectly.
+    m = CUSTOM_FIELD_PATTERN.match(field)
+    if m:
+        source_field_id = m.group(1)
+        mapped_id = _lookup(
+            "ticket_fields", source_field_id, id_map,
+            context, "custom_field_condition_key",
+            raise_on_miss=False,
+        )
+        if mapped_id is not None:
+            if isinstance(mapped_id, str) and mapped_id.isdigit():
+                obj = dict(obj)
+                obj["field"] = f"custom_fields_{mapped_id}"
+            else:
+                logger.warn(
+                    f"Mapped ticket_field ID '{mapped_id}' is not a digit string "
+                    f"— keeping original field '{field}' (context: {context})"
+                )
+        else:
+            # Target has no matching ticket field — this condition/action
+            # cannot work. Strip it so the rule doesn't silently malfunction.
+            logger.warn(
+                f"Stripping condition/action referencing non-migrated "
+                f"ticket field (field='{field}', context='{context}')"
+            )
+            return None
+        # custom_field values are option texts/tags, not IDs — no value remap
+        return obj
 
     category = CONDITION_VALUE_MAP.get(field)
 
