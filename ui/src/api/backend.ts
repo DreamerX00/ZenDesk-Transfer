@@ -212,10 +212,11 @@ export async function createDirectConnection(
   role: Role,
   subdomain: string,
   apiToken: string,
+  email: string,
 ): Promise<{ connection_id: string; role: Role; subdomain: string }> {
   return await _fetch("/connections", {
     method: "POST",
-    body: JSON.stringify({ role, subdomain, api_token: apiToken }),
+    body: JSON.stringify({ role, subdomain, api_token: apiToken, email }),
   });
 }
 

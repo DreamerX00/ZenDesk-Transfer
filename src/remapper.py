@@ -217,6 +217,18 @@ def _remap_condition_item(obj: Dict, id_map: Dict,
         # _remap_value where int conversion IS correct.
         obj["value"] = str(mapped)
     elif category == "users":
+        # If the users category doesn't exist in id_map at all (users haven't
+        # been migrated yet — they're Phase 5, runs after business logic),
+        # leave the condition/action as-is. The source user ID won't match
+        # anyone on target, so the condition is inert but structurally preserved.
+        if "users" not in id_map:
+            # Only warn once — the first time we skip a user remap
+            logger.warn(
+                f"Skipping user ID remap — 'users' category absent from id_map "
+                f"(field='{field}', context='{context}'). "
+                f"Value '{value}' left as-is (inert on target until user migration)."
+            )
+            return obj
         # User ID not found in id_map — remove this condition
         logger.warn(
             f"Stripping condition/action referencing non-migrated user "

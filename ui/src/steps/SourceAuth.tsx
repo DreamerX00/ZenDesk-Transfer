@@ -596,6 +596,7 @@ function DirectForm({
 }) {
   const notify = useToast();
   const [subdomain, setSubdomain] = useState("");
+  const [email, setEmail] = useState("");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -607,8 +608,9 @@ function DirectForm({
     setErr(null);
     setBusy(true);
     try {
-      await createDirectConnection(role, subdomain.trim().toLowerCase(), token.trim());
+      await createDirectConnection(role, subdomain.trim().toLowerCase(), token.trim(), email.trim());
       setSubdomain("");
+      setEmail("");
       setToken("");
       await onConnected();
       notify({
@@ -626,8 +628,9 @@ function DirectForm({
   return (
     <div className="zd-stack">
       <div className="zd-callout zd-callout--info">
-        Use this when you already have a valid OAuth or API token and want to
+        Use this when you already have a valid API token and want to
         skip the browser-based Zendesk consent flow entirely.
+        Requires the admin email that created the token.
       </div>
 
       <label className="zd-field">
@@ -641,7 +644,18 @@ function DirectForm({
       </label>
 
       <label className="zd-field">
-        <span>API or OAuth token</span>
+        <span>Admin email</span>
+        <input
+          className="zd-input"
+          type="email"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          placeholder="admin@example.com"
+        />
+      </label>
+
+      <label className="zd-field">
+        <span>API token</span>
         <input
           className="zd-input"
           type="password"
@@ -656,8 +670,8 @@ function DirectForm({
       <div className="zd-inline-actions">
         <button
           onClick={connect}
-          disabled={busy || !subdomain || !token}
-          style={btn(busy || !subdomain || !token ? "disabled" : "primary")}
+          disabled={busy || !subdomain || !email || !token}
+          style={btn(busy || !subdomain || !email || !token ? "disabled" : "primary")}
           type="button"
         >
           {busy ? "Connecting..." : "Save profile"}
@@ -702,7 +716,8 @@ function UploadEnvForm({
         return;
       }
 
-      await createDirectConnection(role, subdomain, token);
+      const email = parseEnv(text, "ZENDESK_EMAIL") || "";
+      await createDirectConnection(role, subdomain, token, email);
       await onConnected();
       notify({
         tone: "success",

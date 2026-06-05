@@ -163,6 +163,7 @@ class DirectConnectRequest(BaseModel):
     role: str = Field(..., pattern="^(source|target)$")
     subdomain: str
     api_token: str
+    email: str = Field(..., min_length=1)
 
 
 class OAuthExchangeRedirectRequest(BaseModel):
@@ -414,6 +415,7 @@ def create_connection(
         role=body.role,
         subdomain=body.subdomain.strip().lower() if body.subdomain else "",
         auth_kind="api_token",
+        email=body.email.strip().lower() if body.email else "",
         api_token=body.api_token,
     )
     get_connection_store().put(conn)
