@@ -93,13 +93,27 @@ def _confirm_proceed(count_to_create: int, assume_yes: bool) -> bool:
 
 
 def _probe_create_many(target: ZendeskClient) -> bool:
-    """Check if the account supports bulk user creation (create_many)."""
+    """Check if the account supports bulk user creation (create_many).
+    Cleans up the probe user afterward if creation succeeded."""
     try:
         url = target._url("users/create_many")
         resp = target._request(
             "POST", url, json={"users": [{"name": "_probe_", "verified": True}]}
         )
-        return resp.ok
+        if not resp.ok:
+            return False
+        # Clean up the probe user
+        try:
+            data = resp.json()
+            job = data.get("job_status") or {}
+            if job.get("status") == "completed":
+                for result in (job.get("results") or []):
+                    probe_id = result.get("id")
+                    if probe_id:
+                        target.delete(f"users/{probe_id}")
+        except Exception:
+            pass
+        return True
     except Exception:
         return False
 

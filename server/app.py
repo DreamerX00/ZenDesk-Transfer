@@ -589,12 +589,13 @@ def jobs_status(
 async def jobs_events(
     migration_id: str = PathParam(...),
     authorization: Optional[str] = Header(None),
+    t: Optional[str] = Query(None),
 ):
     """Server-Sent Events stream. SSE doesn't allow custom headers in
     EventSource, so the iframe passes the session token as a query
     parameter `?t=...` OR via Authorization header (we accept both).
     """
-    require_session(authorization)
+    require_session(authorization, t=t)
     if not is_valid_migration_id(migration_id):
         raise HTTPException(status_code=400, detail={"error": "invalid migration_id", "kind": "ValueError"})
 

@@ -264,6 +264,7 @@ class ZendeskClient:
         self._oauth_client_secret: Optional[str] = None
         self._env_path: Optional[str] = None
         self._refresh_lock = threading.Lock()
+        self._post_refresh_callback = None
 
         if using_oauth:
             if not isinstance(oauth_token, str) or not oauth_token.strip():
@@ -282,6 +283,7 @@ class ZendeskClient:
             self._basic_auth = (f"{email}/token", api_token)
             self._auth_method = "basic"
 
+        self._token_refreshed = False
         self._thread_local = threading.local()
         self._base_url = self.BASE.format(subdomain=subdomain)
 
@@ -385,6 +387,7 @@ class ZendeskClient:
         # Extract path only for safe logging — never log query strings
         safe_url_label = urllib.parse.urlparse(url).path or url[:80]
         _token_refreshed = False  # only try refresh once per request
+        self._token_refreshed = False  # shared cross-thread guard, reset per request
 
         for attempt in range(self.MAX_RETRIES):
             # Spend one token before sending. On a fresh client this blocks
@@ -450,9 +453,12 @@ class ZendeskClient:
                 body = self._safe_decode(resp, 200)
                 if "invalid_token" in body.lower():
                     with self._refresh_lock:
-                        # Double-check: another thread may already have refreshed
-                        if not _token_refreshed:
+                        # Double-check: another thread may already have refreshed.
+                        # Check the SHARED instance flag here (local _token_refreshed
+                        # may be stale across threads).
+                        if not self._token_refreshed:
                             if self._refresh_token():
+                                self._token_refreshed = True
                                 _token_refreshed = True
                                 import logging as _logging
                                 _logging.getLogger("src.client").info(
@@ -524,6 +530,13 @@ class ZendeskClient:
                 _update_env_token(self._env_path, new_token, new_refresh)
             except Exception:
                 pass  # env write is best-effort; in-memory token is already updated
+
+        # Notify the server-side ConnectionStore (if a callback was registered)
+        if self._post_refresh_callback:
+            try:
+                self._post_refresh_callback(new_token, new_refresh)
+            except Exception:
+                pass
 
         return True
 

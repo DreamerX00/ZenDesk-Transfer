@@ -46,15 +46,12 @@ from server.state import Connection, get_connection_store
 def _build_client(conn: Connection, *, dry_run: bool = False) -> ZendeskClient:
     """Construct a ZendeskClient from a stored Connection.
 
-    NOTE: ZendeskClient's __init__ accepts `env_path` as the file it
-    writes a refreshed OAuth token back into. The server-side flow has
-    no such file — token refreshes need to round-trip through the
-    ConnectionStore. For now we pass env_path=None; the client will
-    skip the refresh-token persistence step (it already tolerates a
-    missing env_path).
+    When using OAuth, registers a post-refresh callback so the new
+    token is persisted back to the ConnectionStore (the client's
+    built-in env_path mechanism is CLI-only and unavailable here).
     """
     if conn.auth_kind == "oauth":
-        return ZendeskClient(
+        client = ZendeskClient(
             subdomain=conn.subdomain,
             oauth_token=conn.oauth_token,
             oauth_refresh_token=conn.oauth_refresh_token,
@@ -63,6 +60,15 @@ def _build_client(conn: Connection, *, dry_run: bool = False) -> ZendeskClient:
             env_path=None,
             dry_run=dry_run,
         )
+        def _persist_refresh(new_token: str, new_refresh: Optional[str]) -> None:
+            conn.oauth_token = new_token
+            if new_refresh:
+                conn.oauth_refresh_token = new_refresh
+            store = get_connection_store()
+            # put() re-encrypts and writes — use same conn.id to overwrite
+            store.put(conn)
+        client._post_refresh_callback = _persist_refresh
+        return client
     if conn.auth_kind == "api_token":
         return ZendeskClient(
             subdomain=conn.subdomain,
@@ -488,11 +494,12 @@ def run_cleanup(
         except Exception:
             pass
 
-        from src.importer import load_id_map, STATE_DIR
+        from src.importer import load_id_map
+        from server.state import state_dir_for
         id_map = load_id_map()
         all_keys = [rkey for rkey, _ in _ALL_RESOURCES_ORDERED]
         deleted = _delete_idmap_resources(target, id_map, all_keys, label="cleanup")
-        _reset_state_files(STATE_DIR)
+        _reset_state_files(state_dir_for(migration_id))
 
         _status_update(
             migration_id, phase="completed",
