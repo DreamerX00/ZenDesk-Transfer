@@ -4,7 +4,7 @@ import { btn } from "./PreFlight";
 
 const PHASE_LABELS: Array<[number, string, string]> = [
   [1, "Foundation", "Groups, organizations, ticket forms, and custom fields."],
-  [3, "Content", "Help Center categories, sections, articles, and segments."],
+  [3, "Content", "Help Center categories, sections, articles, segments, and themes."],
   [2, "Business logic", "Macros, triggers, automations, views, SLAs, and webhooks."],
   [5, "Users", "End-users and, if desired, agent identities."],
   [4, "Verify", "Post-migration verification and reporting output."],

@@ -242,7 +242,7 @@ const PHASE_RESOURCES: Record<string, readonly string[]> = {
     "dynamic_content_items",
     "webhooks",
   ],
-  "3-content": ["categories", "sections", "articles", "user_segments"],
+  "3-content": ["categories", "sections", "articles", "user_segments", "themes"],
   "5-users": ["users"],
   // "format-target", "extract", "4-verify" have no item denominator.
 };
@@ -299,6 +299,7 @@ const PHASE_PROGRESS_RESOURCES: Record<string, readonly string[]> = {
     "hc_sections",
     "hc_articles",
     "hc_user_segments",
+    "themes",
   ],
   "5-users": ["users"],
 };
