@@ -244,6 +244,11 @@ def _import_organizations_batched(
 
         try:
             payload = strip_source_fields(item)
+            # Strip organization custom field values — these reference
+            # source-specific organization field definitions by key/ID.
+            # Leaving them in would create field values on the target
+            # that reference non-existent (or differently-keyed) fields.
+            payload.pop("organization_fields", None)
             payload = remap_payload(
                 payload, id_map, context=f"organizations:{name}"
             )
