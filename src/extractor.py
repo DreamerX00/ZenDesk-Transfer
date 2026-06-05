@@ -48,6 +48,8 @@ RESOURCES = [
     ("user_segments",         "help_center/user_segments",       "hc_user_segments.json"),
     # Users
     ("users",                 "users",                           "users.json"),
+    # Help Center Themes (JSON metadata only; ZIP is exported separately)
+    ("themes",                "guide/theming/themes",            "hc_themes.json"),
 ]
 
 # Resources to skip silently if the account plan doesn't support them
@@ -92,6 +94,9 @@ def extract_all(client: ZendeskClient) -> Dict[str, List[Dict]]:
             )
             result[resource_key] = []
 
+    # Export the live help center theme as a ZIP file
+    _export_live_theme(client, result)
+
     return result
 
 
@@ -119,6 +124,69 @@ def load_export(filename: str) -> List[Dict]:
     except OSError as exc:
         logger.warn(f"Could not read export file '{filename}': {exc}")
         return []
+
+
+def _export_live_theme(
+    client: "ZendeskClient",
+    result: Dict[str, List[Dict]],
+) -> None:
+    """
+    Export the live help center theme from the source as a ZIP file.
+    Saves the ZIP to exports/theme_live.zip and records metadata in result.
+    The live theme is determined by checking the 'live' flag in the themes list.
+    """
+    themes = result.get("themes", [])
+    if not themes:
+        return
+
+    import io as _io
+    import zipfile as _zipfile
+
+    live_theme = None
+    for t in themes:
+        if t.get("live") is True:
+            live_theme = t
+            break
+
+    if not live_theme:
+        return
+
+    theme_id = str(live_theme.get("id", ""))
+    theme_name = live_theme.get("name", "unknown")
+
+    try:
+        zip_data = client.export_theme(theme_id)
+    except Exception as exc:
+        logger.log_failed("themes", theme_id, f"Export failed: {exc}", theme_name)
+        return
+
+    if not zip_data:
+        return
+
+    # Validate it's a real ZIP before saving
+    try:
+        with _zipfile.ZipFile(_io.BytesIO(zip_data)) as zf:
+            if zf.testzip():
+                logger.log_failed("themes", theme_id, "Exported ZIP is corrupt", theme_name)
+                return
+    except Exception as exc:
+        logger.log_failed("themes", theme_id, f"Invalid ZIP data: {exc}", theme_name)
+        return
+
+    zip_filename = f"theme_{theme_id}.zip"
+    fd, tmp_path = tempfile.mkstemp(dir=EXPORTS_DIR, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(zip_data)
+        os.replace(tmp_path, EXPORTS_DIR / zip_filename)
+        logger.info(f"  Exported theme ZIP  {theme_name} → {zip_filename}")
+        result.setdefault("theme_zips", {})[theme_id] = zip_filename
+    except OSError as exc:
+        logger.log_failed("themes", theme_id, f"Failed to save theme ZIP: {exc}", theme_name)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def _save(filename: str, data: Any) -> None:

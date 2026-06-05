@@ -17,6 +17,7 @@ Security notes:
     accidental token leakage.
 """
 
+import io
 import re
 import threading
 import time
@@ -891,3 +892,196 @@ class ZendeskClient:
     def list_resource(self, path: str, resource_key: str) -> List[Dict]:
         """Convenience: collect all paginated items into a list."""
         return list(self.get_all(path, resource_key))
+
+    # ------------------------------------------------------------------ #
+    #  Theme-specific helpers (async job-based workflow)                   #
+    # ------------------------------------------------------------------ #
+
+    def export_theme(
+        self,
+        theme_id: str,
+        *,
+        poll_interval: float = 2.0,
+        max_poll_seconds: int = 120,
+    ) -> bytes:
+        """
+        Export a help center theme as a ZIP file via the async job API.
+
+        1. POST /guide/theming/jobs/themes/exports → creates export job
+        2. Poll job until status="completed"
+        3. Download ZIP from job.data.download.url
+
+        Returns raw ZIP bytes.
+        Raises ZendeskAPIError on failure or timeout.
+        """
+        if self.dry_run:
+            return b""
+
+        job_resp = self.post("guide/theming/jobs/themes/exports", {
+            "job": {"attributes": {"theme_id": theme_id, "format": "zip"}}
+        })
+        job = job_resp.get("job") or {}
+        job_id = job.get("id")
+        if not job_id:
+            raise ZendeskAPIError(
+                0, "Theme export: response had no job.id",
+                "guide/theming/jobs/themes/exports",
+            )
+
+        deadline = time.monotonic() + max_poll_seconds
+        while True:
+            if time.monotonic() > deadline:
+                raise ZendeskAPIError(
+                    0, f"Theme export job {job_id} timed out after {max_poll_seconds}s",
+                    f"guide/theming/jobs/{job_id}",
+                )
+            time.sleep(poll_interval)
+            poll = self.get(f"guide/theming/jobs/{job_id}")
+            job = poll.get("job") or {}
+            status = job.get("status")
+            if status == "completed":
+                download_url = job.get("data", {}).get("download", {}).get("url")
+                if not download_url:
+                    raise ZendeskAPIError(
+                        0, "Theme export completed but no download.url in response",
+                        f"guide/theming/jobs/{job_id}",
+                    )
+                dl = requests.get(download_url, timeout=self.REQUEST_TIMEOUT)
+                dl.raise_for_status()
+                return dl.content
+            if status == "failed":
+                err = job.get("errors") or job.get("data", {})
+                raise ZendeskAPIError(
+                    0, f"Theme export job {job_id} failed: {err}",
+                    f"guide/theming/jobs/{job_id}",
+                )
+
+    def import_theme(
+        self,
+        brand_id: str,
+        theme_zip: bytes,
+        *,
+        poll_interval: float = 2.0,
+        max_poll_seconds: int = 120,
+    ) -> str:
+        """
+        Import a help center theme from ZIP bytes via the async job API.
+
+        1. POST /guide/theming/jobs/themes/imports → get upload URL + params
+        2. Upload ZIP to the temporary upload URL
+        3. Poll job until status="completed"
+        4. Returns the new theme_id
+
+        Raises ZendeskAPIError on failure or timeout.
+        """
+        if self.dry_run:
+            return "dry_run_theme_id"
+
+        job_resp = self.post("guide/theming/jobs/themes/imports", {
+            "job": {"attributes": {"brand_id": brand_id, "format": "zip"}}
+        })
+        job = job_resp.get("job") or {}
+        job_id = job.get("id")
+        theme_id = job.get("data", {}).get("theme_id")
+        upload_url = job.get("data", {}).get("upload", {}).get("url")
+        upload_params = job.get("data", {}).get("upload", {}).get("parameters", {})
+        if not job_id or not upload_url or not theme_id:
+            raise ZendeskAPIError(
+                0, "Theme import: response missing job.id, theme_id, or upload.url",
+                "guide/theming/jobs/themes/imports",
+            )
+
+        files = {"file": ("theme.zip", io.BytesIO(theme_zip))}
+        form_data = dict(upload_params) if upload_params else {}
+        up = requests.post(
+            upload_url, data=form_data, files=files,
+            timeout=self.REQUEST_TIMEOUT,
+        )
+        if not up.ok:
+            raise ZendeskAPIError(
+                up.status_code,
+                f"Theme ZIP upload failed: {up.content[:200].decode('utf-8', errors='replace')}",
+                upload_url,
+            )
+
+        deadline = time.monotonic() + max_poll_seconds
+        while True:
+            if time.monotonic() > deadline:
+                raise ZendeskAPIError(
+                    0, f"Theme import job {job_id} timed out after {max_poll_seconds}s",
+                    f"guide/theming/jobs/{job_id}",
+                )
+            time.sleep(poll_interval)
+            poll = self.get(f"guide/theming/jobs/{job_id}")
+            job = poll.get("job") or {}
+            status = job.get("status")
+            if status == "completed":
+                return str(theme_id)
+            if status == "failed":
+                errs = job.get("errors") or job.get("data", {})
+                raise ZendeskAPIError(
+                    0, f"Theme import job {job_id} failed: {errs}",
+                    f"guide/theming/jobs/{job_id}",
+                )
+
+    def publish_theme(self, theme_id: str) -> Dict:
+        """Publish (make live) a help center theme."""
+        return self.post(f"guide/theming/themes/{theme_id}/publish", {})
+
+    def list_themes(self, brand_id: Optional[str] = None) -> List[Dict]:
+        """List themes. Optionally filter by brand_id."""
+        path = "guide/theming/themes"
+        if brand_id:
+            path += f"?brand_id={brand_id}"
+        data = self.get(path)
+        return data.get("themes", []) if isinstance(data, dict) else []
+
+    def get_help_center_state(self, brand_id: Optional[str] = None) -> str:
+        """
+        Check if Help Center is enabled on the target.
+
+        Returns 'enabled', 'disabled', 'restricted', or 'unknown'.
+        If brand_id is given, checks that brand's help_center_state.
+        Otherwise checks the first brand in the account.
+        """
+        try:
+            brands = self.list_resource("brands", "brands")
+        except (ZendeskAPIError, ZendeskNetworkError):
+            return "unknown"
+        target_brand = None
+        if brand_id:
+            for b in brands:
+                if str(b.get("id")) == str(brand_id):
+                    target_brand = b
+                    break
+        else:
+            target_brand = brands[0] if brands else None
+        if not target_brand:
+            return "unknown"
+        return target_brand.get("help_center_state", "unknown")
+
+    def enable_help_center(self, brand_id: Optional[str] = None) -> bool:
+        """
+        Enable Help Center for a brand.
+        If brand_id is None, enables on the first/default brand.
+        Returns True if enabled, False if already enabled or on failure.
+        """
+        if self.dry_run:
+            return True
+        target_brand_id = brand_id
+        if not target_brand_id:
+            try:
+                brands = self.list_resource("brands", "brands")
+                if brands:
+                    target_brand_id = str(brands[0].get("id"))
+            except (ZendeskAPIError, ZendeskNetworkError):
+                return False
+        if not target_brand_id:
+            return False
+        try:
+            self.put(f"brands/{target_brand_id}", {
+                "brand": {"help_center_state": "enabled"}
+            })
+            return True
+        except (ZendeskAPIError, ZendeskNetworkError):
+            return False

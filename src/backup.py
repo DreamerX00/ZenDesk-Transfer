@@ -51,6 +51,7 @@ CREATE_RKEY: Dict[str, str] = {
     "routing_attributes":    "routing_attribute",
     "dynamic_content_items": "dynamic_content_item",
     "webhooks":              "webhook",
+    "themes":                "theme",
 }
 
 # System ticket-field types that exist in every account and cannot be re-created.
@@ -91,6 +92,7 @@ RESTORE_ORDER = [
     ("routing_attributes",    "routing/attributes"),
     ("dynamic_content_items", "dynamic_content/items"),
     ("webhooks",              "webhooks"),
+    ("themes",                "guide/theming/themes"),
 ]
 
 SAFE_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$")
@@ -127,6 +129,10 @@ def backup(client: ZendeskClient) -> Optional[Path]:
         _save_backup(backup_dir / filename, items)
         logger.info(f"  Backed up {len(items):>4}  {resource_key}")
         total += len(items)
+
+        # For themes, also export the theme ZIPs
+        if resource_key == "themes":
+            total += _backup_themes(client, backup_dir, items)
 
     if total == 0:
         logger.success("Target account is empty — no backup needed.")
@@ -350,6 +356,42 @@ def _prepare_ticket_form(payload: Dict) -> Dict:
     payload.pop("agent_conditions", None)
     payload.pop("restricted_brand_ids", None)
     return payload
+
+
+def _backup_themes(
+    client: ZendeskClient,
+    backup_dir: Path,
+    themes: List[Dict],
+) -> int:
+    """
+    Export each non-system theme from the target as a ZIP file and save
+    it to the backup directory. Returns the number of themes backed up.
+    """
+    count = 0
+    for theme in themes:
+        theme_id = str(theme.get("id", ""))
+        if not theme_id:
+            continue
+        theme_name = theme.get("name", "unknown")
+        try:
+            zip_data = client.export_theme(theme_id)
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.log_failed("themes", theme_id, f"Export failed: {exc}", theme_name)
+            continue
+        except Exception as exc:
+            logger.log_failed("themes", theme_id, f"Export failed: {exc}", theme_name)
+            continue
+        if not zip_data:
+            continue
+        zip_filename = f"theme_{theme_id}.zip"
+        try:
+            (backup_dir / zip_filename).write_bytes(zip_data)
+        except OSError as exc:
+            logger.log_failed("themes", theme_id, f"Failed to save ZIP: {exc}", theme_name)
+            continue
+        logger.info(f"  Backed up theme ZIP  {theme_name} → {zip_filename}")
+        count += 1
+    return count
 
 
 def _save_backup(path: Path, data: any) -> None:

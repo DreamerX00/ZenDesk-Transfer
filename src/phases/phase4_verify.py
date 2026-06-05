@@ -35,6 +35,7 @@ VERIFY_RESOURCES = [
     ("HC Categories",        "help_center/categories",    "categories"),
     ("HC Sections",          "help_center/sections",      "sections"),
     ("HC Articles",          "help_center/articles",      "articles"),
+    ("HC Themes",            "guide/theming/themes",      "themes"),
     ("Users",                "users",                     "users"),
 ]
 

@@ -1,8 +1,8 @@
 """
-Phase 3 — Help Center Content Migration.
+Phase 3 — Help Center Content & Theme Migration.
 
 Migrates (in strict order):
-  User Segments → Categories → Sections → Articles → Attachments
+  User Segments → Categories → Sections → Articles → Attachments → Themes
 
 Bug fixes vs v1:
   - _import_hc_resource now wraps remap_payload in try/except RemapError.
@@ -16,11 +16,14 @@ Bug fixes vs v1:
 """
 
 import io
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from src.client import ZendeskClient, ZendeskAPIError, ZendeskNetworkError
+from src.extractor import EXPORTS_DIR
 from src.importer import load_id_map, _record_mapping
 from src.remapper import strip_source_fields, remap_payload, RemapError
 from src.utils import logger
@@ -76,9 +79,13 @@ def run(source: ZendeskClient, target: ZendeskClient,
     logger.section("4.1.3  Help Center Articles (with labels & attachments)")
     _import_articles(source, target, id_map, exports.get("articles", []))
 
+    # ---- 4.1.7  Help Center Theme ------------------------------------- #
+    logger.section("4.1.7  Help Center Theme (portal UI)")
+    _migrate_themes(source, target, exports)
+
     from src.importer import flush_id_map
     flush_id_map(id_map)
-    logger.success("Phase 4 — Help Center Content complete.")
+    logger.success("Phase 4 — Help Center Content & Theme complete.")
     return id_map
 
 
@@ -535,3 +542,119 @@ def _migrate_article_labels(
             "hc_article_labels", source_article_id,
             f"Failed to migrate labels: {exc}", article_title,
         )
+
+
+# ------------------------------------------------------------------ #
+#  Theme Migration (portal UI / branding / sign-in page)              #
+# ------------------------------------------------------------------ #
+
+def _migrate_themes(source: ZendeskClient, target: ZendeskClient,
+                    exports: Dict) -> None:
+    """
+    Migrate the live help center theme (portal UI, branding, customer
+    sign-in page, submit-request form layout) from source to target.
+
+    Workflow:
+      1. Check if Help Center is enabled on target → enable if disabled
+      2. Load the exported theme ZIP from the exports directory
+      3. Import the ZIP to the target account
+      4. Publish the imported theme so it goes live
+
+    The theme controls the entire customer-facing portal experience:
+    home page, article pages, category/section pages, the new-request
+    form ("Submit a request"), the request-list page ("My activities"),
+    and the sign-in page — everything defined by the Curlybars templates,
+    CSS, JavaScript, and assets in the theme.
+    """
+    theme_zips = exports.get("theme_zips", {})
+    if not theme_zips:
+        logger.info("  No theme ZIPs exported — skipping theme migration.")
+        return
+
+    if target.dry_run:
+        logger.info("  Dry-run: would import theme ZIP to target.")
+        return
+
+    # Step 1: Ensure Help Center is enabled on the target
+    logger.info("  Checking Help Center state on target...")
+    hc_state = target.get_help_center_state()
+    if hc_state == "disabled":
+        logger.warn("  Help Center is disabled on target — attempting to enable...")
+        if target.enable_help_center():
+            logger.success("  Help Center enabled on target.")
+        else:
+            logger.log_failed(
+                "themes", "N/A",
+                "Could not enable Help Center on target. Theme migration skipped.",
+                "N/A",
+            )
+            return
+    elif hc_state == "unknown":
+        logger.warn(
+            "  Could not determine Help Center state — proceeding with theme import "
+            "anyway."
+        )
+    else:
+        logger.info(f"  Help Center state on target: {hc_state}")
+
+    # Get the target brand id for theme import
+    try:
+        brands = target.list_resource("brands", "brands")
+    except (ZendeskAPIError, ZendeskNetworkError) as exc:
+        logger.log_failed("themes", "N/A", f"Cannot list brands: {exc}", "N/A")
+        return
+    if not brands:
+        logger.log_failed("themes", "N/A", "No brands found on target", "N/A")
+        return
+    target_brand_id = str(brands[0].get("id"))
+    logger.info(f"  Using target brand_id={target_brand_id}")
+
+    # Step 2-4: Import each theme ZIP, publish the live one
+    themes_meta = exports.get("themes", [])
+    live_theme_id = None
+    for t in themes_meta:
+        if t.get("live") is True:
+            live_theme_id = str(t.get("id", ""))
+            break
+
+    for theme_id, zip_filename in theme_zips.items():
+        zip_path = EXPORTS_DIR / zip_filename
+        if not zip_path.exists():
+            logger.log_failed(
+                "themes", theme_id,
+                f"Theme ZIP not found at {zip_path}",
+                zip_filename,
+            )
+            continue
+
+        try:
+            zip_data = zip_path.read_bytes()
+        except OSError as exc:
+            logger.log_failed("themes", theme_id, f"Failed to read ZIP: {exc}", zip_filename)
+            continue
+
+        try:
+            logger.info(f"  Importing theme ZIP {zip_filename} to target...")
+            new_theme_id = target.import_theme(target_brand_id, zip_data)
+            logger.log_created("themes", theme_id, new_theme_id, zip_filename)
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.log_failed("themes", theme_id, str(exc), zip_filename)
+            continue
+        except Exception as exc:
+            logger.log_failed(
+                "themes", theme_id,
+                f"Unexpected error importing theme: {exc}", zip_filename,
+            )
+            continue
+
+        # Publish the imported theme if it was the live theme on source
+        is_live = (theme_id == live_theme_id)
+        if is_live:
+            try:
+                target.publish_theme(new_theme_id)
+                logger.log_created("themes", theme_id, new_theme_id, f"{zip_filename} (published)")
+            except (ZendeskAPIError, ZendeskNetworkError) as exc:
+                logger.log_failed(
+                    "themes", theme_id,
+                    f"Import succeeded but publish failed: {exc}", zip_filename,
+                )

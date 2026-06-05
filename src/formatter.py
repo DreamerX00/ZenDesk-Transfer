@@ -31,6 +31,7 @@ from src.utils import logger
 # one for this resource — set to None for resources that only allow
 # single DELETE (the vast majority).
 FORMAT_ORDER = [
+    ("HC Themes",              "guide/theming/themes",         "themes",               "guide/theming/themes/{id}",           None),
     ("Webhooks",               "webhooks",                     "webhooks",             "webhooks/{id}",                       None),
     ("Triggers",               "triggers",                     "triggers",             "triggers/{id}",                       None),
     ("Automations",            "automations",                  "automations",          "automations/{id}",                    None),
@@ -324,6 +325,9 @@ def _is_deletable(
     if item.get("type") in SYSTEM_TYPES:
         return False
     if item.get("built_in"):
+        return False
+    # Live help center theme cannot be deleted (Zendesk API returns error)
+    if item.get("live"):
         return False
     # Default groups, default ticket forms, default brands, etc. cannot be
     # deleted by Zendesk regardless of plan — attempting the DELETE always

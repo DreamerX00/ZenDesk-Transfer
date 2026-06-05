@@ -388,6 +388,7 @@ _ALL_RESOURCES_ORDERED = [
     ("hc_sections",           "help_center/sections/{id}"),
     ("hc_categories",         "help_center/categories/{id}"),
     ("hc_user_segments",      "help_center/user_segments/{id}"),
+    ("themes",                "guide/theming/themes/{id}"),
     ("webhooks",              "webhooks/{id}"),
     ("dynamic_content_items", "dynamic_content/items/{id}"),
     ("routing_attributes",    "routing/attributes/{id}"),
@@ -421,6 +422,7 @@ _PHASE_RESOURCE_KEYS = {
     ],
     3: [
         "hc_articles", "hc_sections", "hc_categories", "hc_user_segments",
+        "themes",
     ],
 }
 
