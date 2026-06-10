@@ -149,10 +149,12 @@ def _export_live_theme(
             break
 
     if not live_theme:
+        logger.info("  No live theme found in source — skipping theme ZIP export.")
         return
 
     theme_id = str(live_theme.get("id", ""))
     theme_name = live_theme.get("name", "unknown")
+    logger.info(f"  Exporting live theme '{theme_name}' (id={theme_id})...")
 
     try:
         zip_data = client.export_theme(theme_id)
@@ -161,6 +163,7 @@ def _export_live_theme(
         return
 
     if not zip_data:
+        logger.log_failed("themes", theme_id, "Export returned empty ZIP data", theme_name)
         return
 
     # Validate it's a real ZIP before saving
@@ -173,6 +176,7 @@ def _export_live_theme(
         logger.log_failed("themes", theme_id, f"Invalid ZIP data: {exc}", theme_name)
         return
 
+    logger.info(f"  Theme ZIP size: {len(zip_data)} bytes")
     zip_filename = f"theme_{theme_id}.zip"
     fd, tmp_path = tempfile.mkstemp(dir=EXPORTS_DIR, suffix=".tmp")
     try:

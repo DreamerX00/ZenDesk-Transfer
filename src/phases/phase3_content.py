@@ -557,8 +557,9 @@ def _migrate_themes(source: ZendeskClient, target: ZendeskClient,
     Workflow:
       1. Check if Help Center is enabled on target → enable if disabled
       2. Load the exported theme ZIP from the exports directory
-      3. Import the ZIP to the target account
-      4. Publish the imported theme so it goes live
+      3. Ensure target has room for new themes (delete old ones if at limit)
+      4. Import the ZIP to the target account
+      5. Publish the imported theme so it goes live
 
     The theme controls the entire customer-facing portal experience:
     home page, article pages, category/section pages, the new-request
@@ -609,7 +610,24 @@ def _migrate_themes(source: ZendeskClient, target: ZendeskClient,
     target_brand_id = str(brands[0].get("id"))
     logger.info(f"  Using target brand_id={target_brand_id}")
 
-    # Step 2-4: Import each theme ZIP, publish the live one
+    # Step 2: Ensure target has room for new themes
+    try:
+        target_themes = target.list_themes(target_brand_id)
+    except (ZendeskAPIError, ZendeskNetworkError) as exc:
+        logger.warn(f"  Could not list target themes: {exc}. Proceeding anyway.")
+        target_themes = []
+
+    # Zendesk allows approximately 10 themes per brand. If we're near the
+    # limit, delete old non-live themes to make room for the import.
+    MAX_THEMES = 10
+    if len(target_themes) >= MAX_THEMES:
+        logger.warn(
+            f"  Target already has {len(target_themes)} themes (max ~{MAX_THEMES}). "
+            "Removing non-live themes to make room..."
+        )
+        _cleanup_target_themes(target, target_themes, keep_live=True)
+
+    # Step 3-5: Import each theme ZIP, publish the live one
     themes_meta = exports.get("themes", [])
     live_theme_id = None
     for t in themes_meta:
@@ -637,6 +655,28 @@ def _migrate_themes(source: ZendeskClient, target: ZendeskClient,
             logger.info(f"  Importing theme ZIP {zip_filename} to target...")
             new_theme_id = target.import_theme(target_brand_id, zip_data)
             logger.log_created("themes", theme_id, new_theme_id, zip_filename)
+        except ZendeskAPIError as exc:
+            if "TooManyThemes" in str(exc):
+                logger.warn("  TooManyThemes — removing old themes and retrying...")
+                try:
+                    target_themes = target.list_themes(target_brand_id)
+                    _cleanup_target_themes(target, target_themes, keep_live=True)
+                except (ZendeskAPIError, ZendeskNetworkError) as cleanup_exc:
+                    logger.log_failed(
+                        "themes", theme_id,
+                        f"Cleanup failed: {cleanup_exc}. Cannot import theme.",
+                        zip_filename,
+                    )
+                    continue
+                try:
+                    new_theme_id = target.import_theme(target_brand_id, zip_data)
+                    logger.log_created("themes", theme_id, new_theme_id, zip_filename)
+                except (ZendeskAPIError, ZendeskNetworkError) as retry_exc:
+                    logger.log_failed("themes", theme_id, str(retry_exc), zip_filename)
+                    continue
+            else:
+                logger.log_failed("themes", theme_id, str(exc), zip_filename)
+                continue
         except (ZendeskAPIError, ZendeskNetworkError) as exc:
             logger.log_failed("themes", theme_id, str(exc), zip_filename)
             continue
@@ -658,3 +698,27 @@ def _migrate_themes(source: ZendeskClient, target: ZendeskClient,
                     "themes", theme_id,
                     f"Import succeeded but publish failed: {exc}", zip_filename,
                 )
+
+
+def _cleanup_target_themes(
+    target: ZendeskClient,
+    themes: List[Dict],
+    keep_live: bool = True,
+) -> None:
+    """Delete non-live themes on the target to free up slots for import."""
+    deleted = 0
+    for theme in themes:
+        if keep_live and theme.get("live"):
+            continue
+        theme_id = str(theme.get("id", ""))
+        theme_name = theme.get("name", "unknown")
+        if not theme_id:
+            continue
+        try:
+            target.delete(f"guide/theming/themes/{theme_id}")
+            logger.log_purged("themes", theme_id, theme_name)
+            deleted += 1
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.warn(f"  Failed to delete theme '{theme_name}' (id={theme_id}): {exc}")
+    if deleted:
+        logger.info(f"  Deleted {deleted} theme(s) from target to free up space.")

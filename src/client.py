@@ -897,12 +897,20 @@ class ZendeskClient:
     #  Theme-specific helpers (async job-based workflow)                   #
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _ensure_https(url: str) -> str:
+        """Prepend https:// if the URL has no scheme."""
+        url = url.strip()
+        if url and not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        return url
+
     def export_theme(
         self,
         theme_id: str,
         *,
         poll_interval: float = 2.0,
-        max_poll_seconds: int = 120,
+        max_poll_seconds: int = 180,
     ) -> bytes:
         """
         Export a help center theme as a ZIP file via the async job API.
@@ -946,6 +954,7 @@ class ZendeskClient:
                         0, "Theme export completed but no download.url in response",
                         f"guide/theming/jobs/{job_id}",
                     )
+                download_url = self._ensure_https(download_url)
                 dl = requests.get(download_url, timeout=self.REQUEST_TIMEOUT)
                 dl.raise_for_status()
                 return dl.content
@@ -962,7 +971,7 @@ class ZendeskClient:
         theme_zip: bytes,
         *,
         poll_interval: float = 2.0,
-        max_poll_seconds: int = 120,
+        max_poll_seconds: int = 180,
     ) -> str:
         """
         Import a help center theme from ZIP bytes via the async job API.
@@ -990,6 +999,8 @@ class ZendeskClient:
                 0, "Theme import: response missing job.id, theme_id, or upload.url",
                 "guide/theming/jobs/themes/imports",
             )
+
+        upload_url = self._ensure_https(upload_url)
 
         files = {"file": ("theme.zip", io.BytesIO(theme_zip))}
         form_data = dict(upload_params) if upload_params else {}

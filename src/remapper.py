@@ -91,7 +91,6 @@ STRIP_FIELDS = frozenset({
     "restricted_agent",
     "suspended",
     "role_type",
-    "active",
     "confirmed",
 })
 
