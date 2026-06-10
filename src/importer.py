@@ -436,6 +436,26 @@ def import_resource(
             _record_mapping(id_map, resource_key, source_id, target_id)
             logger.log_created(resource_key, source_id, target_id, item_name)
 
+            # Fix for Zendesk ignoring active/status state on creation (e.g. Triggers)
+            needs_deactivation = False
+            deactivation_payload = {}
+            if payload.get("active") is False and created.get("active") is True:
+                needs_deactivation = True
+                deactivation_payload["active"] = False
+            elif payload.get("status") == "inactive" and created.get("status") == "active":
+                needs_deactivation = True
+                deactivation_payload["status"] = "inactive"
+
+            if needs_deactivation:
+                try:
+                    update_path = update_path_fn(target_id) if update_path_fn else delete_path_fn(target_id)
+                    client.put(update_path, {create_rkey: deactivation_payload})
+                except Exception as exc:
+                    logger.warn(
+                        f"Failed to set inactive state for {resource_key} "
+                        f"'{item_name}' (id={target_id}): {exc}"
+                    )
+
         except (ZendeskAPIError, ZendeskNetworkError) as exc:
             logger.log_failed(resource_key, source_id, str(exc), item_name)
         except Exception as exc:
