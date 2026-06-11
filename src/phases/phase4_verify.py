@@ -27,6 +27,7 @@ VERIFY_RESOURCES = [
     ("Organizations",        "organizations",             "organizations"),
     ("Views",                "views",                     "views"),
     ("Triggers",             "triggers",                  "triggers"),
+    ("Trigger Categories",   "trigger_categories",        "trigger_categories"),
     ("Automations",          "automations",               "automations"),
     ("Macros",               "macros",                    "macros"),
     ("SLA Policies",         "slas/policies",             "sla_policies"),

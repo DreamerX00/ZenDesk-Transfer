@@ -2,8 +2,8 @@
 Phase 2 — Business Logic Migration.
 
 Migrates (in dependency order after foundation):
-  Ticket Form Field Assignments → Views → Triggers → Automations →
-  Macros → SLA Policies → Group SLAs → Schedules →
+  Ticket Form Field Assignments → Trigger Categories → Views → Triggers →
+  Automations → Macros → SLA Policies → Group SLAs → Schedules →
   Routing Attributes → Dynamic Content → Webhooks
 
 Bug fixes vs v1:
@@ -11,6 +11,8 @@ Bug fixes vs v1:
   - form.get("id") None guard — str(None) produced "None" key mismatch.
   - int(tfid) guarded with .isdigit() to prevent ValueError on corrupt map.
   - dry-run return value from target.put() now checked.
+  - trigger_categories are now migrated (3.3) so category_id on triggers
+    can be remapped to target trigger_category IDs instead of being stripped.
 """
 
 from typing import Dict, List, Optional
@@ -42,8 +44,21 @@ def run(source: ZendeskClient, target: ZendeskClient,
         conflict_mode="replace",
     )
 
-    # ---- 3.3  Triggers ----------------------------------------------- #
-    logger.section("3.3  Triggers")
+    # ---- 3.3  Trigger Categories ------------------------------------- #
+    logger.section("3.3  Trigger Categories")
+    import_resource(
+        client=target, id_map=id_map,
+        source_items=exports.get("trigger_categories", []),
+        resource_key="trigger_categories",
+        list_path="trigger_categories", list_rkey="trigger_categories",
+        create_path="trigger_categories", create_rkey="trigger_category",
+        create_response_rkey="trigger_category",
+        delete_path_fn=lambda tid: f"trigger_categories/{tid}",
+        conflict_mode="replace",
+    )
+
+    # ---- 3.4  Triggers ----------------------------------------------- #
+    logger.section("3.4  Triggers")
     import_resource(
         client=target, id_map=id_map,
         source_items=exports.get("triggers", []),
@@ -53,10 +68,11 @@ def run(source: ZendeskClient, target: ZendeskClient,
         create_response_rkey="trigger",
         delete_path_fn=lambda tid: f"triggers/{tid}",
         pre_process_fn=_prepare_trigger,
+        post_process_fn=_assign_trigger_category,
         conflict_mode="replace",
     )
 
-    # ---- 3.4  Automations -------------------------------------------- #
+    # ---- 3.5  Automations -------------------------------------------- #
     logger.section("3.4  Automations")
     import_resource(
         client=target, id_map=id_map,
@@ -70,8 +86,8 @@ def run(source: ZendeskClient, target: ZendeskClient,
         conflict_mode="replace",
     )
 
-    # ---- 3.5  Macros ------------------------------------------------- #
-    logger.section("3.5  Macros")
+    # ---- 3.6  Macros ------------------------------------------------- #
+    logger.section("3.6  Macros")
     import_resource(
         client=target, id_map=id_map,
         source_items=exports.get("macros", []),
@@ -83,8 +99,8 @@ def run(source: ZendeskClient, target: ZendeskClient,
         conflict_mode="replace",
     )
 
-    # ---- 3.6  SLA Policies ------------------------------------------- #
-    logger.section("3.6  SLA Policies")
+    # ---- 3.7  SLA Policies ------------------------------------------- #
+    logger.section("3.7  SLA Policies")
     import_resource(
         client=target, id_map=id_map,
         source_items=exports.get("sla_policies", []),
@@ -96,8 +112,8 @@ def run(source: ZendeskClient, target: ZendeskClient,
         conflict_mode="replace",
     )
 
-    # ---- 3.7  Group SLA Policies (Enterprise) ------------------------ #
-    logger.section("3.7  Group SLA Policies")
+    # ---- 3.8  Group SLA Policies (Enterprise) ------------------------ #
+    logger.section("3.8  Group SLA Policies")
     if exports.get("group_sla_policies"):
         import_resource(
             client=target, id_map=id_map,
@@ -114,8 +130,8 @@ def run(source: ZendeskClient, target: ZendeskClient,
             "group_sla_policies", "N/A", "Not available on this plan"
         )
 
-    # ---- 3.8  Business Hours Schedules ------------------------------- #
-    logger.section("3.8  Business Hours Schedules")
+    # ---- 3.9  Business Hours Schedules ------------------------------- #
+    logger.section("3.9  Business Hours Schedules")
     import_resource(
         client=target, id_map=id_map,
         source_items=exports.get("schedules", []),
@@ -127,8 +143,8 @@ def run(source: ZendeskClient, target: ZendeskClient,
         conflict_mode="replace",
     )
 
-    # ---- 3.9  Routing Attributes ------------------------------------- #
-    logger.section("3.9  Routing Attributes")
+    # ---- 3.10  Routing Attributes ------------------------------------ #
+    logger.section("3.10  Routing Attributes")
     if exports.get("routing_attributes"):
         import_resource(
             client=target, id_map=id_map,
@@ -146,8 +162,8 @@ def run(source: ZendeskClient, target: ZendeskClient,
             "None in source or not on Enterprise plan"
         )
 
-    # ---- 3.10  Dynamic Content --------------------------------------- #
-    logger.section("3.10  Dynamic Content")
+    # ---- 3.11  Dynamic Content --------------------------------------- #
+    logger.section("3.11  Dynamic Content")
     import_resource(
         client=target, id_map=id_map,
         source_items=exports.get("dynamic_content_items", []),
@@ -159,8 +175,8 @@ def run(source: ZendeskClient, target: ZendeskClient,
         conflict_mode="replace",
     )
 
-    # ---- 3.11  Webhooks ---------------------------------------------- #
-    logger.section("3.11  Webhooks")
+    # ---- 3.12  Webhooks ---------------------------------------------- #
+    logger.section("3.12  Webhooks")
     import_resource(
         client=target, id_map=id_map,
         source_items=exports.get("webhooks", []),
@@ -311,23 +327,40 @@ def _prepare_rule(item: Dict, id_map: Dict) -> Optional[Dict]:
     return item
 
 
-def _prepare_trigger(item: Dict, id_map: Dict) -> Optional[Dict]:
+def _prepare_trigger(item: Optional[Dict], id_map: Dict) -> Optional[Dict]:
     """
-    Trigger-specific pre-processing.
+    Pre-process a trigger before the generic importer.
 
-    Triggers carry a top-level `category_id` referring to **trigger
-    categories** (api/v2/trigger_categories) — a separate resource we don't
-    migrate. The remapper's FIELD_REMAP_MAP['category_id'] points at
-    `hc_categories`, which is the correct namespace for HC sections but
-    wrong here. Stripping the field lets the target place the trigger in
-    its default category, which is the safe fallback.
+    Pops `category_id` so the generic remapper (which maps
+    FIELD_REMAP_MAP['category_id'] → hc_categories) never sees it.
+    The remapped target category_id is stashed in `_trigger_category_id`
+    which _assign_trigger_category renames back to `category_id` after
+    remap_payload runs.
     """
+    if item is None:
+        return None
     item = _prepare_rule(item, id_map)
     if item is None:
         return None
     item = dict(item)
-    item.pop("category_id", None)
+    cat_id = item.pop("category_id", None)
+    if cat_id is not None:
+        mapping = id_map.get("trigger_categories", {})
+        target_cat_id = mapping.get(str(cat_id))
+        if target_cat_id is not None:
+            item["_trigger_category_id"] = target_cat_id
     return item
+
+
+def _assign_trigger_category(payload: Dict, id_map: Dict) -> Dict:
+    """
+    Post-process: restore the remapped category_id from the stash
+    created by _prepare_trigger, so it appears in the POST payload.
+    """
+    if "_trigger_category_id" in payload:
+        tid = payload.pop("_trigger_category_id")
+        payload["category_id"] = int(tid) if str(tid).isdigit() else tid
+    return payload
 
 
 def _scrub_webhook_secret(item: Dict, _id_map: Dict) -> Optional[Dict]:

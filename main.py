@@ -75,6 +75,7 @@ ALL_RESOURCES_ORDERED = [
     ("macros",                "macros/{id}"),
     ("automations",           "automations/{id}"),
     ("triggers",              "triggers/{id}"),
+    ("trigger_categories",    "trigger_categories/{id}"),
     ("views",                 "views/{id}"),
     # Foundation (least-dependent last)
     ("organizations",         "organizations/{id}"),
@@ -96,7 +97,7 @@ PHASE_RESOURCE_KEYS = {
     2: [
         "webhooks", "dynamic_content_items", "routing_attributes",
         "schedules", "group_sla_policies", "sla_policies",
-        "macros", "automations", "triggers", "views",
+        "macros", "automations", "triggers", "trigger_categories", "views",
     ],
     3: [
         "hc_articles", "hc_sections", "hc_categories", "hc_user_segments",

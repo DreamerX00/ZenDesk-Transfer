@@ -65,7 +65,7 @@ const initialPersisted: PersistedSlice = {
   step: "preflight",
   sourceConnectionId: null,
   targetConnectionId: null,
-  selectedPhases: [1, 2, 3, 4, 5],
+  selectedPhases: [1, 2, 3, 4],
   maxUsers: null,
   usersFrom: 0,
   dryRun: false,

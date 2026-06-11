@@ -92,30 +92,39 @@ export function ChoosePhases() {
 
         <div className="zd-tab-panel">
           {activeTab === "scope" ? (
-            <div className="zd-choice-grid">
-              {PHASE_LABELS.map(([phaseNumber, label, description]) => {
-                const active = selectedPhases.includes(phaseNumber);
-                return (
-                  <label
-                    key={phaseNumber}
-                    className={`zd-choice-card${active ? " is-active" : ""}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={active}
-                      onChange={() => toggle(phaseNumber)}
-                      style={{ marginTop: 4 }}
-                    />
-                    <div>
-                      <strong>
-                        {phaseNumber}. {label}
-                      </strong>
-                      <p>{description}</p>
-                    </div>
-                  </label>
-                );
-              })}
-            </div>
+            <>
+              <div className="zd-choice-grid">
+                {PHASE_LABELS.map(([phaseNumber, label, description]) => {
+                  const active = selectedPhases.includes(phaseNumber);
+                  return (
+                    <label
+                      key={phaseNumber}
+                      className={`zd-choice-card${active ? " is-active" : ""}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={active}
+                        onChange={() => toggle(phaseNumber)}
+                        style={{ marginTop: 4 }}
+                      />
+                      <div>
+                        <strong>
+                          {phaseNumber}. {label}
+                        </strong>
+                        <p>{description}</p>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+              {usersSelected ? (
+                <div className="zd-callout zd-callout--danger" style={{ marginTop: 12 }}>
+                  <strong>⚠ User migration selected.</strong> Migrating users is a
+                  destructive, high-risk operation that can trigger Zendesk account
+                  suspension. Verify the target is correct before proceeding.
+                </div>
+              ) : null}
+            </>
           ) : null}
 
           {activeTab === "users" ? (

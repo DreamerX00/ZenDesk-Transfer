@@ -34,6 +34,7 @@ FORMAT_ORDER = [
     ("HC Themes",              "guide/theming/themes",         "themes",               "guide/theming/themes/{id}",           None),
     ("Webhooks",               "webhooks",                     "webhooks",             "webhooks/{id}",                       None),
     ("Triggers",               "triggers",                     "triggers",             "triggers/{id}",                       None),
+    ("Trigger Categories",     "trigger_categories",           "trigger_categories",   "trigger_categories/{id}",             None),
     ("Automations",            "automations",                  "automations",          "automations/{id}",                    None),
     ("Macros",                 "macros",                       "macros",               "macros/{id}",                         None),
     ("Views",                  "views",                        "views",                "views/{id}",                          None),

@@ -230,6 +230,7 @@ def import_resource(
     delete_path_fn: Callable[[Any], str],
     name_field: str = "name",
     pre_process_fn: Optional[Callable[[Dict, Dict], Optional[Dict]]] = None,
+    post_process_fn: Optional[Callable[[Dict, Dict], Dict]] = None,
     skip_system: bool = True,
     conflict_mode: str = "skip",
     update_path_fn: Optional[Callable[[Any], str]] = None,
@@ -315,6 +316,16 @@ def import_resource(
             logger.log_failed(resource_key, source_id,
                               f"Unexpected remapper error: {exc}", item_name)
             continue
+
+        if post_process_fn:
+            try:
+                payload = post_process_fn(payload, id_map)
+            except Exception as exc:
+                logger.log_failed(
+                    resource_key, source_id,
+                    f"post_process_fn raised {type(exc).__name__}: {exc}", item_name
+                )
+                continue
 
         # Conflict handling — sequential by design.
         if item_name and item_name in existing_by_name:

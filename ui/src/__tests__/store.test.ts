@@ -26,8 +26,8 @@ describe("wizard store", () => {
     }
   });
 
-  it("defaults to all five phases selected", () => {
-    expect(useStore.getState().selectedPhases).toEqual([1, 2, 3, 4, 5]);
+  it("defaults to phases 1-4 selected (users phase is opt-in)", () => {
+    expect(useStore.getState().selectedPhases).toEqual([1, 2, 3, 4]);
   });
 
   it("persists phase selection changes", () => {

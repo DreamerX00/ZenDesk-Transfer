@@ -32,6 +32,7 @@ RESOURCES = [
     ("organizations",         "organizations",                   "organizations.json"),
     # Business logic layer
     ("views",                 "views",                           "views.json"),
+    ("trigger_categories",    "trigger_categories",              "trigger_categories.json"),
     ("triggers",              "triggers",                        "triggers.json"),
     ("automations",           "automations",                     "automations.json"),
     ("macros",                "macros",                          "macros.json"),
