@@ -620,12 +620,12 @@ function HistoryPanel() {
               <td><span className={`zd-status-pill ${statusPillClass(m.phase)}`}>{m.phase}</span></td>
               <td>
                 {m.has_report ? (
-                  <button onClick={() => loadReport(m.migration_id)} className="zd-button zd-button--ghost" type="button">View</button>
+                  <button onClick={() => loadReport(m.migration_id)} className="zd-button zd-button--secondary" type="button">View</button>
                 ) : <span style={{ color: "var(--text-faint)" }}>—</span>}
               </td>
               <td>
                 {m.has_log ? (
-                  <a href={downloadUrl(`/migrations/${encodeURIComponent(m.migration_id)}/log`)} className="zd-button zd-button--ghost" download>Download</a>
+                  <a href={downloadUrl(`/migrations/${encodeURIComponent(m.migration_id)}/log`)} className="zd-button zd-button--secondary" download>Download</a>
                 ) : <span style={{ color: "var(--text-faint)" }}>—</span>}
               </td>
             </tr>
@@ -679,9 +679,9 @@ function DownloadActions({ migrationId, reportMarkdown }: { migrationId: string;
     <div className="zd-inline-actions" style={{ marginTop: 12, gap: 8 }}>
       <a href={downloadUrl(`/migrations/${encodeURIComponent(migrationId)}/report`)} className="zd-button zd-button--secondary" download>Download .md</a>
       <button onClick={downloadHtml} className="zd-button zd-button--secondary" type="button">Download .html</button>
-      <button onClick={printReport} className="zd-button zd-button--ghost" type="button">Print / PDF</button>
-      <a href={downloadUrl(`/migrations/${encodeURIComponent(migrationId)}/log`)} className="zd-button zd-button--ghost" download>Audit log (.jsonl)</a>
-      <a href={downloadUrl(`/migrations/${encodeURIComponent(migrationId)}/id-map`)} className="zd-button zd-button--ghost" download>ID map (.json)</a>
+      <button onClick={printReport} className="zd-button zd-button--secondary" type="button">Print / PDF</button>
+      <a href={downloadUrl(`/migrations/${encodeURIComponent(migrationId)}/log`)} className="zd-button zd-button--secondary" download>Audit log (.jsonl)</a>
+      <a href={downloadUrl(`/migrations/${encodeURIComponent(migrationId)}/id-map`)} className="zd-button zd-button--secondary" download>ID map (.json)</a>
     </div>
   );
 }
