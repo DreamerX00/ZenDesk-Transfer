@@ -53,6 +53,9 @@ export const PHASE_ORDER = [
 
 const MIN_ITEMS_FOR_ETA = 10;
 const MIN_TIMESPAN_MS_FOR_ETA = 5_000;
+/** Don't show any ETA until at least this many seconds into the phase —
+ *  prevents showing a bogus number immediately after phase transitions. */
+const MIN_PHASE_ELAPSED_SEC_FOR_ETA = 10;
 
 export interface Estimate {
   /** Seconds since the job started (always available once running). */
@@ -107,26 +110,40 @@ export function computeEstimate({
     };
   }
 
+  // Don't show any ETA in the first N seconds — the numbers are too
+  // noisy and will swing wildly as the phase ramps up.
+  if (phaseElapsedSec < MIN_PHASE_ELAPSED_SEC_FOR_ETA) {
+    return {
+      totalElapsedSec,
+      phaseElapsedSec,
+      etaSec: null,
+      itemsPerSec: null,
+      reason: "Just started — settling in…",
+    };
+  }
+
   // How many items does this phase intend to process? extracted_<r>
   // gives us per-resource totals; sum the ones relevant to the phase.
   const phaseTotal = expectedItemsForPhase(phase, status);
 
   // Non-item phases such as extract / format-target / verify have no
-  // honest per-item denominator. Fall back to historical phase weights
-  // immediately instead of waiting for noisy note-level events.
+  // honest per-item denominator. Project total job time from how long
+  // we've already spent in this phase relative to its weight.
   if (phaseTotal === null) {
     const phaseWeight = PHASE_WEIGHTS[phase] ?? 0.05;
-    const expectedPhaseSec = Math.max(phaseWeight * 600, 15);
-    const phaseRemainingSec = Math.max(expectedPhaseSec - phaseElapsedSec, 0);
-    const phasePerWeightSec = (phaseElapsedSec + phaseRemainingSec) / phaseWeight;
+    // elapsed / weight = projected total job time. Subtract elapsed to
+    // get remaining for this phase. Floor at 5 s to avoid looking stuck.
+    const projectedTotalSec = phaseElapsedSec / phaseWeight;
+    const phaseRemainingSec = Math.max(projectedTotalSec - phaseElapsedSec, 5);
     const remainingWeight = sumRemainingPhaseWeights(phase, selectedPhases);
+    const otherPhasesSec = projectedTotalSec * remainingWeight;
 
     return {
       totalElapsedSec,
       phaseElapsedSec,
-      etaSec: Math.max(phaseRemainingSec + (phasePerWeightSec * remainingWeight), 0),
+      etaSec: Math.max(phaseRemainingSec + otherPhasesSec, 0),
       itemsPerSec: null,
-      reason: "Estimated from typical phase duration for non-item work.",
+      reason: null,
     };
   }
 

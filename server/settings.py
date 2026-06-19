@@ -122,21 +122,14 @@ def _validate(s: Settings) -> None:
     # In production we require explicit secrets.
     if not s.dev_mode:
         if not os.environ.get("ZDX_HMAC_SECRET"):
-            # Don't crash — warn loudly. The auto-generated value still
-            # provides security within a single boot.
-            import sys
-            print(
-                "WARNING: ZDX_HMAC_SECRET is unset; using an ephemeral value "
-                "that changes on every restart. Set this in production.",
-                file=sys.stderr,
+            raise RuntimeError(
+                "ZDX_HMAC_SECRET must be set in production. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
             )
         if not s.fernet_key:
-            import sys
-            print(
-                "WARNING: ZDX_FERNET_KEY is unset; stored credentials will "
-                "use an ephemeral key and become unreadable across restarts. "
-                "Generate one with `python -m cryptography.fernet`.",
-                file=sys.stderr,
+            raise RuntimeError(
+                "ZDX_FERNET_KEY must be set in production. "
+                "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
             )
 
     # Sanity checks regardless of mode.

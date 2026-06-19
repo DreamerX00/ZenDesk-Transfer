@@ -23,18 +23,17 @@ describe("computeEstimate", () => {
       status: {
         phase: "extract",
         started_at: at(0),
-        phase_started_at: at(5),
+        phase_started_at: at(0),
       },
       events: [],
-      now: BASE_MS + (10 * 1000),
+      now: BASE_MS + (15 * 1000),
       selectedPhases: new Set(["extract", "1-foundation", "5-users"]),
     });
 
-    expect(estimate.totalElapsedSec).toBe(10);
-    expect(estimate.phaseElapsedSec).toBe(5);
+    expect(estimate.totalElapsedSec).toBe(15);
+    expect(estimate.phaseElapsedSec).toBe(15);
     expect(estimate.itemsPerSec).toBeNull();
-    expect(estimate.reason).toContain("non-item work");
-    expect(estimate.etaSec).toBeCloseTo(355, 6);
+    expect(estimate.etaSec).toBeCloseTo(450, 6);
   });
 
   it("waits for enough completed items before showing ETA", () => {

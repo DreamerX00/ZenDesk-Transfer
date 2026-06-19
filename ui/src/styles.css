@@ -1,35 +1,191 @@
+/* ========================================================================
+   Zendesk Transfer — Claymorphism Design System
+   Single warm clay surface with dual-shadow extrusion.
+   ======================================================================== */
+
 :root {
   color-scheme: light;
+
+  /* ---- Clay shadow system — cool-toned, very diffuse ---- */
+  --clay-raised:
+    -8px -8px 20px rgba(255, 255, 255, 0.9),
+    8px 8px 20px rgba(100, 110, 130, 0.12);
+  --clay-raised-soft:
+    -5px -5px 14px rgba(255, 255, 255, 0.85),
+    5px 5px 14px rgba(100, 110, 130, 0.10);
+  --clay-raised-hover:
+    -10px -10px 24px rgba(255, 255, 255, 0.95),
+    10px 10px 24px rgba(100, 110, 130, 0.14);
+  --clay-pressed:
+    inset -5px -5px 12px rgba(255, 255, 255, 0.7),
+    inset 5px 5px 12px rgba(100, 110, 130, 0.10);
+  --clay-pressed-deep:
+    inset -4px -4px 10px rgba(255, 255, 255, 0.6),
+    inset 4px 4px 10px rgba(100, 110, 130, 0.12);
+  --clay-button:
+    -5px -5px 14px rgba(255, 255, 255, 0.9),
+    5px 5px 14px rgba(100, 110, 130, 0.12);
+  --clay-button-hover:
+    -7px -7px 18px rgba(255, 255, 255, 0.95),
+    7px 7px 18px rgba(100, 110, 130, 0.15);
+  --clay-button-pressed:
+    inset -4px -4px 10px rgba(255, 255, 255, 0.5),
+    inset 4px 4px 10px rgba(100, 110, 130, 0.12);
+  --clay-toast:
+    -6px -6px 16px rgba(255, 255, 255, 0.9),
+    8px 8px 24px rgba(100, 110, 130, 0.14);
+
+  /* ---- Colored clay shadows ---- */
+  --clay-colored:
+    -5px -5px 14px rgba(255, 255, 255, 0.35),
+    5px 5px 14px rgba(0, 0, 0, 0.12);
+  --clay-colored-pressed:
+    inset -4px -4px 10px rgba(255, 255, 255, 0.2),
+    inset 4px 4px 10px rgba(0, 0, 0, 0.12);
+
+  /* ---- Colors -- cool blue-gray neumorphism ---- */
+  --brand: #2f8fa8;
+  --brand-soft: #d6eaf0;
+  --brand-strong: #1e7a94;
+
+  /* Surface — cool white-gray from reference */
+  --surface: #e8eaef;
+  --surface-elevated: #e8eaef;
+  --surface-accent: #dfe2e8;
+
+  /* Text */
+  --text-strong: #2c3040;
+  --text-main: #3a3e47;
+  --text-soft: #6b7280;
+  --text-faint: #9ba1a8;
+
+  /* Borders */
+  --border: #d5d8de;
+  --border-strong: #c0c4cc;
+
+  /* Accent — teal/cyan from reference */
+  --accent: #2f8fa8;
+  --accent-soft: #d6eaf0;
+  --accent-strong: #1e7a94;
+
+  /* Status colors */
+  --success: #4a8c6f;
+  --success-soft: #d9eddf;
+  --success-border: #b5d8c7;
+  --warning: #8a7a3c;
+  --warning-soft: #eeeade;
+  --warning-border: #d5ccb5;
+  --danger: #a8534a;
+  --danger-soft: #eddedb;
+  --danger-border: #d8bfba;
+  --info: #5a8ba8;
+  --info-soft: #dce8ef;
+  --info-border: #bdd1dc;
+
+  /* ---- Radius — pillowy rounded ---- */
+  --radius-card: 18px;
+  --radius-button: 14px;
+  --radius-input: 12px;
+  --radius-pill: 999px;
+  --radius-sm: 10px;
+
+  /* ---- Fonts ---- */
   --font-sans: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --bg-page: #f8f9f9;
-  --bg-subtle: #f1f4f4;
-  --surface: #ffffff;
-  --surface-muted: #f8f9f9;
-  --surface-info: #edf5ff;
-  --surface-success: #edf8f4;
-  --surface-warning: #fff7e6;
-  --surface-danger: #fff1f3;
-  --text-strong: #03363d;
-  --text-main: #2f3941;
-  --text-soft: #68737d;
-  --text-faint: #87929d;
-  --border: #d8dcde;
-  --border-strong: #c2c8cc;
-  --brand: #03363d;
-  --brand-soft: #17494d;
-  --accent: #1f73b7;
-  --success: #038153;
-  --warning: #ad5918;
-  --danger: #d93f4c;
-  --shadow-xs: 0 1px 3px rgba(47, 57, 65, 0.08);
-  --shadow-sm: 0 8px 24px rgba(47, 57, 65, 0.08);
-  --radius-lg: 16px;
-  --radius-md: 12px;
-  --radius-sm: 10px;
 }
 
-* {
+/* ========================================================================
+   Dark Theme — deep neumorphic night
+   ======================================================================== */
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --brand: #3aa5c0;
+  --brand-soft: #15323d;
+  --brand-strong: #4fb8d4;
+
+  --surface: #1e2128;
+  --surface-elevated: #242833;
+  --surface-accent: #181b21;
+
+  --text-strong: #e8eaef;
+  --text-main: #c2c7d2;
+  --text-soft: #8b919c;
+  --text-faint: #5c626d;
+
+  --border: #2d323c;
+  --border-strong: #3a404c;
+
+  --accent: #3aa5c0;
+  --accent-soft: #15323d;
+  --accent-strong: #4fb8d4;
+
+  --success: #5cb88a;
+  --success-soft: #162a22;
+  --success-border: #2a4a3a;
+  --warning: #c9a94e;
+  --warning-soft: #2a2417;
+  --warning-border: #4a4030;
+  --danger: #d97060;
+  --danger-soft: #2a1815;
+  --danger-border: #4a2a26;
+  --info: #6ba8c9;
+  --info-soft: #162630;
+  --info-border: #2a404c;
+
+  --clay-raised:
+    -8px -8px 20px rgba(70, 80, 100, 0.12),
+    8px 8px 20px rgba(0, 0, 0, 0.4);
+  --clay-raised-soft:
+    -5px -5px 14px rgba(70, 80, 100, 0.10),
+    5px 5px 14px rgba(0, 0, 0, 0.35);
+  --clay-raised-hover:
+    -10px -10px 24px rgba(70, 80, 100, 0.15),
+    10px 10px 24px rgba(0, 0, 0, 0.45);
+  --clay-pressed:
+    inset -5px -5px 12px rgba(70, 80, 100, 0.10),
+    inset 5px 5px 12px rgba(0, 0, 0, 0.4);
+  --clay-pressed-deep:
+    inset -4px -4px 10px rgba(70, 80, 100, 0.08),
+    inset 4px 4px 10px rgba(0, 0, 0, 0.45);
+  --clay-button:
+    -5px -5px 14px rgba(70, 80, 100, 0.12),
+    5px 5px 14px rgba(0, 0, 0, 0.4);
+  --clay-button-hover:
+    -7px -7px 18px rgba(70, 80, 100, 0.15),
+    7px 7px 18px rgba(0, 0, 0, 0.45);
+  --clay-button-pressed:
+    inset -4px -4px 10px rgba(70, 80, 100, 0.10),
+    inset 4px 4px 10px rgba(0, 0, 0, 0.4);
+  --clay-toast:
+    -6px -6px 16px rgba(70, 80, 100, 0.12),
+    8px 8px 24px rgba(0, 0, 0, 0.45);
+  --clay-colored:
+    -5px -5px 14px rgba(0, 0, 0, 0.2),
+    5px 5px 14px rgba(0, 0, 0, 0.35);
+  --clay-colored-pressed:
+    inset -4px -4px 10px rgba(0, 0, 0, 0.15),
+    inset 4px 4px 10px rgba(0, 0, 0, 0.35);
+}
+
+:root[data-theme="dark"] body {
+  background:
+    radial-gradient(circle at 50% 40%, transparent 18%, rgba(255, 255, 255, 0.007) 19%, transparent 20%),
+    radial-gradient(circle at 50% 40%, transparent 30%, rgba(255, 255, 255, 0.005) 31%, transparent 32%),
+    radial-gradient(circle at 50% 40%, transparent 42%, rgba(255, 255, 255, 0.004) 43%, transparent 44%),
+    radial-gradient(circle at 50% 40%, transparent 55%, rgba(255, 255, 255, 0.003) 56%, transparent 57%),
+    radial-gradient(circle at 50% 40%, transparent 68%, rgba(255, 255, 255, 0.002) 69%, transparent 70%),
+    linear-gradient(180deg, #131620 0%, #181b25 50%, #131620 100%);
+}
+
+/* ========================================================================
+   Reset & Base
+   ======================================================================== */
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -44,7 +200,16 @@ body {
   color: var(--text-main);
   font-family: var(--font-sans);
   background:
-    linear-gradient(180deg, #ffffff 0%, #f8f9f9 120px, #f3f5f5 100%);
+    /* concentric ripple texture — subtle depth like the reference */
+    radial-gradient(circle at 50% 40%, transparent 18%, rgba(0, 0, 0, 0.012) 19%, transparent 20%),
+    radial-gradient(circle at 50% 40%, transparent 30%, rgba(0, 0, 0, 0.010) 31%, transparent 32%),
+    radial-gradient(circle at 50% 40%, transparent 42%, rgba(0, 0, 0, 0.008) 43%, transparent 44%),
+    radial-gradient(circle at 50% 40%, transparent 55%, rgba(0, 0, 0, 0.006) 56%, transparent 57%),
+    radial-gradient(circle at 50% 40%, transparent 68%, rgba(0, 0, 0, 0.004) 69%, transparent 70%),
+    /* very subtle grain-like noise via dithered gradient */
+    linear-gradient(180deg, #cfd4db 0%, #d5d9e0 50%, #cdd2da 100%);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 button,
@@ -55,16 +220,12 @@ select {
 }
 
 button {
-  transition:
-    background-color 160ms ease,
-    border-color 160ms ease,
-    color 160ms ease,
-    box-shadow 160ms ease,
-    transform 160ms ease;
+  transition: box-shadow 180ms ease, transform 180ms ease,
+    background-color 180ms ease, border-color 180ms ease, color 180ms ease;
 }
 
-button:not(:disabled):hover {
-  transform: translateY(-1px);
+button:not(:disabled) {
+  cursor: pointer;
 }
 
 button:disabled {
@@ -73,205 +234,233 @@ button:disabled {
 
 input[type="checkbox"],
 input[type="radio"] {
-  accent-color: var(--brand);
+  accent-color: var(--accent);
 }
 
 code,
 pre {
   font-family: var(--font-mono);
+  font-size: 13px;
 }
 
 a {
   color: inherit;
 }
 
+/* ========================================================================
+   Button System — clay buttons that extrude from the surface
+   ======================================================================== */
+
+.zd-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 0 22px;
+  border: none;
+  border-radius: var(--radius-button);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--text-main);
+  box-shadow: var(--clay-button);
+  transition: box-shadow 200ms ease, transform 200ms ease,
+    background-color 200ms ease;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  position: relative;
+}
+
+.zd-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: var(--clay-button-hover);
+}
+
+.zd-button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: var(--clay-button-pressed);
+}
+
+.zd-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+.zd-button--primary {
+  background: var(--accent);
+  color: #ffffff;
+  box-shadow: var(--clay-colored);
+}
+
+.zd-button--primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  box-shadow: var(--clay-button-hover);
+}
+
+.zd-button--primary:active:not(:disabled) {
+  box-shadow: var(--clay-colored-pressed);
+}
+
+.zd-button--danger {
+  background: var(--danger);
+  color: #ffffff;
+  box-shadow: var(--clay-colored);
+}
+
+.zd-button--danger:hover:not(:disabled) {
+  background: #964a42;
+  box-shadow: var(--clay-button-hover);
+}
+
+.zd-button--danger:active:not(:disabled) {
+  box-shadow: var(--clay-colored-pressed);
+}
+
+.zd-button--secondary {
+  background: var(--surface);
+  color: var(--text-main);
+}
+
+.zd-button--ghost {
+  background: transparent;
+  color: var(--text-soft);
+  box-shadow: none;
+}
+
+.zd-button--ghost:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text-main);
+  box-shadow: none;
+  transform: none;
+}
+
+.zd-button--ghost-danger {
+  background: transparent;
+  color: var(--danger);
+  box-shadow: none;
+}
+
+.zd-button--ghost-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  box-shadow: none;
+  transform: none;
+}
+
+/* ========================================================================
+   App Shell
+   ======================================================================== */
+
 .zd-app-shell {
   min-height: 100vh;
-  padding: 16px;
+  padding: 20px;
 }
 
 .zd-shell-grid {
   display: grid;
   gap: 16px;
-  max-width: 1280px;
+  max-width: 1120px;
   margin: 0 auto;
 }
 
-.zd-admin-header,
-.zd-workspace,
-.zd-panel,
-.zd-empty-state,
-.zd-log-frame,
-.zd-table-wrap {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xs);
-}
+/* ========================================================================
+   Header — extruded clay panel
+   ======================================================================== */
 
 .zd-admin-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 16px;
-  padding: 20px 24px;
-  align-items: start;
+  padding: 16px 20px;
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-raised);
 }
 
 .zd-admin-branding {
   display: flex;
-  gap: 16px;
+  align-items: center;
+  gap: 14px;
   min-width: 0;
-}
-
-.zd-admin-copy,
-.zd-workspace-copy,
-.zd-panel-header > div,
-.zd-choice-card > div,
-.zd-switch-row > div,
-.zd-summary-item,
-.zd-overview-tile,
-.zd-step-tab-copy,
-.zd-connection-meta {
-  min-width: 0;
-}
-
-.zd-admin-kicker {
-  color: var(--text-faint);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
 }
 
 .zd-brand-mark {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
-  flex: 0 0 44px;
-  border-radius: 12px;
-  background: var(--brand);
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border-radius: var(--radius-button);
+  background: var(--accent);
   color: #ffffff;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
+  box-shadow: var(--clay-colored);
 }
 
-.zd-brand-title,
-.zd-screen-title,
-.zd-side-title {
-  margin: 0;
-  color: var(--text-strong);
+.zd-admin-copy {
+  min-width: 0;
+}
+
+.zd-admin-kicker {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .zd-brand-title {
-  margin-top: 4px;
-  font-size: 28px;
-  line-height: 1.1;
-}
-
-.zd-screen-title {
-  font-size: 24px;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 22px;
   line-height: 1.2;
+  font-weight: 700;
 }
 
-.zd-hero-copy,
-.zd-screen-copy,
-.zd-body-copy,
-.zd-side-copy,
-.zd-panel p,
-.zd-empty-state p {
+.zd-hero-copy {
+  margin: 2px 0 0;
   color: var(--text-soft);
-  line-height: 1.6;
-}
-
-.zd-hero-copy,
-.zd-screen-copy {
-  margin: 8px 0 0;
-}
-
-.zd-topbar-meta,
-.zd-inline-actions,
-.zd-hero-chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 400px;
 }
 
 .zd-topbar-meta {
-  justify-content: flex-end;
-  align-content: start;
-}
-
-.zd-chip {
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  min-height: 34px;
-  max-width: 100%;
-  padding: 6px 12px;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  background: var(--surface-muted);
-  color: var(--text-main);
-  font-size: 13px;
-  font-weight: 600;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  flex-shrink: 0;
 }
 
-.zd-chip b {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: inherit;
-  opacity: 0.8;
+/* ========================================================================
+   Workshop / Main Content Area
+   ======================================================================== */
+
+.zd-workspace {
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-raised);
+  overflow: hidden;
 }
 
-.zd-chip span {
-  overflow-wrap: anywhere;
+.zd-workspace-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 20px;
+  padding: 20px 24px 0;
+  align-items: start;
 }
 
-.zd-chip--brand {
-  background: #eef3f5;
-  color: var(--brand);
-  border-color: #d7e1e4;
-}
-
-.zd-chip--accent {
-  background: #eef5fb;
-  color: var(--accent);
-  border-color: #d5e3ef;
-}
-
-.zd-chip--success {
-  background: var(--surface-success);
-  color: var(--success);
-  border-color: #cfe8dc;
-}
-
-.zd-chip--warning {
-  background: var(--surface-warning);
-  color: var(--warning);
-  border-color: #f0ddc0;
-}
-
-.zd-chip--danger {
-  background: var(--surface-danger);
-  color: var(--danger);
-  border-color: #efc7cd;
-}
-
-.zd-chip--info {
-  background: var(--surface-info);
-  color: var(--accent);
-  border-color: #d6e3f1;
-}
-
-.zd-chip--ghost {
-  background: #ffffff;
-  color: var(--text-soft);
-  border-color: var(--border);
+.zd-workspace-copy {
+  min-width: 0;
 }
 
 .zd-section-eyebrow {
@@ -279,7 +468,7 @@ a {
   align-items: center;
   gap: 8px;
   color: var(--text-faint);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -287,188 +476,235 @@ a {
 
 .zd-section-eyebrow::before {
   content: "";
-  width: 18px;
+  width: 16px;
   height: 1px;
   background: currentColor;
+  flex-shrink: 0;
 }
 
-.zd-workspace {
-  padding: 0;
-  overflow: hidden;
+.zd-screen-title {
+  margin: 4px 0 0;
+  color: var(--text-strong);
+  font-size: 22px;
+  line-height: 1.25;
+  font-weight: 700;
 }
 
-.zd-workspace-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
-  gap: 16px;
-  padding: 20px 24px 0;
+.zd-screen-copy {
+  margin: 6px 0 0;
+  color: var(--text-soft);
+  font-size: 14px;
+  line-height: 1.5;
+  max-width: 480px;
 }
+
+/* ---- Overview (status tiles) ---- */
 
 .zd-overview-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: start;
+  flex-shrink: 0;
 }
 
 .zd-overview-tile {
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-muted);
-  overflow-wrap: anywhere;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border-radius: var(--radius-button);
+  box-shadow: var(--clay-raised-soft);
+  min-width: 0;
 }
 
 .zd-overview-tile b {
-  display: block;
-  margin-bottom: 6px;
+  flex-shrink: 0;
   color: var(--text-faint);
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .zd-overview-tile strong {
-  display: block;
   color: var(--text-strong);
-  font-size: 15px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.zd-overview-tile span {
-  display: block;
-  margin-top: 6px;
-  color: var(--text-soft);
-  font-size: 12px;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
+/* ========================================================================
+   Step Tabs (Navigation)
+   ======================================================================== */
 
-.zd-step-tabs,
-.zd-section-tabs {
+.zd-step-tabs {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   overflow-x: auto;
   padding: 16px 24px;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  background: var(--surface-muted);
-}
-
-.zd-step-tabs {
   position: sticky;
   top: 0;
   z-index: 3;
 }
 
-.zd-step-tabs::-webkit-scrollbar,
-.zd-section-tabs::-webkit-scrollbar,
-.zd-log-body::-webkit-scrollbar,
-.zd-report-pre::-webkit-scrollbar,
-.zd-pre-block::-webkit-scrollbar {
-  height: 8px;
-  width: 8px;
+.zd-step-tabs::-webkit-scrollbar {
+  height: 6px;
 }
 
-.zd-step-tabs::-webkit-scrollbar-thumb,
-.zd-section-tabs::-webkit-scrollbar-thumb,
-.zd-log-body::-webkit-scrollbar-thumb,
-.zd-report-pre::-webkit-scrollbar-thumb,
-.zd-pre-block::-webkit-scrollbar-thumb {
-  background: #c2c8cc;
-  border-radius: 999px;
-}
-
-.zd-step-tab,
-.zd-section-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 10px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: #ffffff;
-  color: var(--text-soft);
-  box-shadow: none;
+.zd-step-tabs::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-pill);
 }
 
 .zd-step-tab {
-  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 14px;
+  border: none;
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: box-shadow 180ms ease, color 180ms ease, background 180ms ease;
+  white-space: nowrap;
 }
 
-.zd-section-tab {
-  flex: 0 0 auto;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  min-width: 160px;
+.zd-step-tab:hover {
+  color: var(--text-main);
+  box-shadow: var(--clay-raised-soft);
 }
 
-.zd-step-tab.is-active,
-.zd-section-tab.is-active {
-  border-color: var(--brand);
-  background: #eef3f5;
-  color: var(--brand);
+.zd-step-tab.is-active {
+  color: var(--accent-strong);
+  box-shadow: var(--clay-pressed);
 }
 
 .zd-step-tab.is-done {
-  border-color: #cfe8dc;
-  background: var(--surface-success);
   color: var(--success);
 }
 
 .zd-step-tab-index {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 24px;
-  border-radius: 999px;
-  background: #e9ebed;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
   color: inherit;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
+  box-shadow: var(--clay-raised-soft);
+  transition: box-shadow 180ms ease, background 180ms ease;
 }
 
 .zd-step-tab.is-active .zd-step-tab-index {
-  background: var(--brand);
+  background: var(--accent);
   color: #ffffff;
+  box-shadow: var(--clay-colored);
 }
 
 .zd-step-tab.is-done .zd-step-tab-index {
   background: var(--success);
   color: #ffffff;
+  box-shadow: var(--clay-colored);
 }
 
 .zd-step-tab-copy {
   display: grid;
-  gap: 2px;
+  gap: 1px;
+  text-align: left;
 }
 
-.zd-step-tab-copy strong,
-.zd-section-tab strong {
+.zd-step-tab-copy strong {
   color: inherit;
   font-size: 13px;
   font-weight: 700;
-  overflow-wrap: anywhere;
 }
 
 .zd-step-tab-copy small {
   color: inherit;
-  font-size: 11px;
-  opacity: 0.85;
-  overflow-wrap: anywhere;
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+/* ========================================================================
+   Section Tabs (within steps)
+   ======================================================================== */
+
+.zd-section-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.zd-section-tabs::-webkit-scrollbar {
+  height: 6px;
+}
+
+.zd-section-tabs::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-pill);
+}
+
+.zd-section-tab {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-width: 140px;
+  padding: 10px 14px;
+  border: none;
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: box-shadow 180ms ease, color 180ms ease;
+  text-align: left;
+}
+
+.zd-section-tab:hover {
+  color: var(--text-main);
+  box-shadow: var(--clay-raised-soft);
+}
+
+.zd-section-tab.is-active {
+  color: var(--accent-strong);
+  box-shadow: var(--clay-pressed);
+}
+
+.zd-section-tab strong {
+  color: inherit;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .zd-section-tab span {
   color: inherit;
   font-size: 11px;
-  line-height: 1.4;
-  opacity: 0.82;
-  overflow-wrap: anywhere;
+  opacity: 0.75;
 }
+
+.zd-tab-panel {
+  padding-top: 0;
+}
+
+/* ========================================================================
+   Workspace Body (step content area)
+   ======================================================================== */
 
 .zd-workspace-body {
   padding: 20px 24px 24px;
@@ -480,22 +716,40 @@ a {
   gap: 16px;
 }
 
-.zd-panel {
-  padding: 18px;
+/* ========================================================================
+   Cards & Panels — extruded clay surfaces
+   ======================================================================== */
+
+.zd-panel,
+.zd-card {
+  padding: 18px 20px;
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-raised-soft);
   min-width: 0;
   overflow: hidden;
 }
 
+.zd-card--raised,
 .zd-panel--raised {
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--clay-raised);
+}
+
+.zd-card--elevated {
+  box-shadow: var(--clay-raised-hover);
+}
+
+.zd-card--inset {
+  box-shadow: var(--clay-pressed);
 }
 
 .zd-panel-header {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .zd-panel-header h3,
@@ -506,12 +760,212 @@ a {
   color: var(--text-strong);
 }
 
+.zd-panel p,
+.zd-body-copy {
+  color: var(--text-soft);
+  line-height: 1.6;
+  margin: 6px 0 0;
+}
+
+/* ========================================================================
+   Connection Cards (PreFlight / Status step)
+   ======================================================================== */
+
+.zd-connection-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-raised-soft);
+  transition: box-shadow 180ms ease;
+}
+
+.zd-connection-card:hover {
+  box-shadow: var(--clay-raised);
+}
+
+.zd-connection-icon {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+  border-radius: var(--radius-button);
+  background: var(--surface);
+  box-shadow: var(--clay-raised-soft);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.zd-connection-icon.is-ok {
+  color: var(--success);
+  box-shadow: var(--clay-colored);
+  background: var(--success-soft);
+}
+
+.zd-connection-icon.is-error {
+  color: var(--danger);
+  box-shadow: var(--clay-colored);
+  background: var(--danger-soft);
+}
+
+.zd-connection-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  flex-shrink: 0;
+}
+
+.zd-connection-dot.is-ok {
+  background: var(--success);
+  box-shadow: var(--clay-colored);
+}
+
+.zd-connection-dot.is-error {
+  background: var(--danger);
+  box-shadow: var(--clay-colored);
+}
+
+.zd-connection-meta {
+  min-width: 0;
+  flex: 1;
+}
+
+.zd-connection-meta strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.zd-connection-meta span {
+  color: var(--text-soft);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/* ========================================================================
+   Status / Health Badges
+   ======================================================================== */
+
+.zd-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--surface);
+  box-shadow: var(--clay-raised-soft);
+}
+
+.zd-status-badge--success {
+  background: var(--success-soft);
+  color: var(--success);
+  box-shadow: var(--clay-colored);
+}
+
+.zd-status-badge--warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+  box-shadow: var(--clay-colored);
+}
+
+.zd-status-badge--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+  box-shadow: var(--clay-colored);
+}
+
+.zd-status-badge--neutral {
+  color: var(--text-faint);
+}
+
+/* ========================================================================
+   Chips — small clay pills
+   ======================================================================== */
+
+.zd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  max-width: 100%;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-main);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: var(--clay-raised-soft);
+}
+
+.zd-chip b {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: inherit;
+  opacity: 0.75;
+}
+
+.zd-chip span {
+  overflow-wrap: anywhere;
+}
+
+.zd-chip--brand {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  box-shadow: var(--clay-colored);
+}
+
+.zd-chip--success {
+  background: var(--success-soft);
+  color: var(--success);
+  box-shadow: var(--clay-colored);
+}
+
+.zd-chip--warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+  box-shadow: var(--clay-colored);
+}
+
+.zd-chip--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+  box-shadow: var(--clay-colored);
+}
+
+.zd-chip--info {
+  background: var(--info-soft);
+  color: var(--info);
+  box-shadow: var(--clay-colored);
+}
+
+.zd-chip--ghost {
+  box-shadow: none;
+  color: var(--text-soft);
+}
+
+/* ========================================================================
+   Callouts
+   ======================================================================== */
+
 .zd-callout {
   padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-card);
   line-height: 1.6;
   overflow-wrap: anywhere;
+  background: var(--surface);
+  box-shadow: var(--clay-raised-soft);
 }
 
 .zd-callout strong {
@@ -519,114 +973,271 @@ a {
 }
 
 .zd-callout--info {
-  background: var(--surface-info);
-  border-color: #d6e3f1;
-  color: #305d8c;
+  background: var(--info-soft);
+  color: var(--info);
+  box-shadow: var(--clay-colored);
 }
 
 .zd-callout--success {
-  background: var(--surface-success);
-  border-color: #cfe8dc;
+  background: var(--success-soft);
   color: var(--success);
+  box-shadow: var(--clay-colored);
 }
 
 .zd-callout--warning {
-  background: var(--surface-warning);
-  border-color: #f0ddc0;
+  background: var(--warning-soft);
   color: var(--warning);
+  box-shadow: var(--clay-colored);
 }
 
 .zd-callout--danger {
-  background: var(--surface-danger);
-  border-color: #efc7cd;
-  color: #a32733;
+  background: var(--danger-soft);
+  color: var(--danger);
+  box-shadow: var(--clay-colored);
 }
 
+/* ========================================================================
+   Empty State & Loading
+   ======================================================================== */
+
 .zd-empty-state {
-  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: 36px 24px;
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-raised-soft);
 }
+
+.zd-empty-state h3 {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.zd-empty-state p {
+  color: var(--text-soft);
+  max-width: 420px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* ========================================================================
+   Orbit Loader
+   ======================================================================== */
+
+.zd-orbit-loader {
+  position: relative;
+  width: 40px;
+  height: 40px;
+}
+
+.zd-orbit-loader span {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-pill);
+  border: 2px solid transparent;
+  border-top-color: var(--accent);
+  animation: spin 1.1s linear infinite;
+}
+
+.zd-orbit-loader span:nth-child(2) {
+  inset: 5px;
+  border-top-color: var(--accent-strong);
+  animation-duration: 1.5s;
+  animation-direction: reverse;
+}
+
+.zd-orbit-loader span:nth-child(3) {
+  inset: 10px;
+  border-top-color: var(--text-faint);
+  animation-duration: 0.9s;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ========================================================================
+   Choice Cards (phase selectors)
+   ======================================================================== */
 
 .zd-choice-grid {
   display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
 
-.zd-choice-card,
-.zd-switch-row {
+.zd-choice-card {
   display: flex;
   align-items: flex-start;
   gap: 12px;
   min-width: 0;
   padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-raised-soft);
+  cursor: pointer;
+  transition: box-shadow 180ms ease, background 180ms ease;
 }
 
-.zd-choice-card.is-active,
+.zd-choice-card:hover {
+  box-shadow: var(--clay-raised);
+}
+
+.zd-choice-card.is-active {
+  background: var(--accent-soft);
+  box-shadow: var(--clay-pressed);
+}
+
+.zd-choice-card strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.zd-choice-card p {
+  margin: 4px 0 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.zd-choice-card input[type="checkbox"],
+.zd-choice-card input[type="radio"] {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+/* ========================================================================
+   Switch Rows (toggle options)
+   ======================================================================== */
+
+.zd-switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 16px;
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-raised-soft);
+  cursor: pointer;
+  transition: box-shadow 180ms ease, background 180ms ease;
+}
+
+.zd-switch-row:hover {
+  box-shadow: var(--clay-raised);
+}
+
 .zd-switch-row.is-active {
-  border-color: #bfd2d8;
-  background: #f5f8f9;
+  background: var(--accent-soft);
+  box-shadow: var(--clay-pressed);
 }
 
-.zd-choice-card strong,
 .zd-switch-row strong {
   display: block;
   color: var(--text-strong);
-  overflow-wrap: anywhere;
 }
 
-.zd-choice-card p,
 .zd-switch-row p {
   margin: 4px 0 0;
-  overflow-wrap: anywhere;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.5;
 }
+
+.zd-switch-row input[type="checkbox"] {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+/* ========================================================================
+   Form Fields — pressed into the clay surface
+   ======================================================================== */
 
 .zd-field {
   display: block;
   width: 100%;
   color: var(--text-main);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .zd-field > span {
   display: inline-block;
-  margin-bottom: 8px;
-}
-
-.zd-input,
-.zd-file-input {
-  width: 100%;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: #ffffff;
-  color: var(--text-main);
+  margin-bottom: 6px;
 }
 
 .zd-input {
-  min-height: 40px;
-  padding: 0 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  border: none;
+  border-radius: var(--radius-input);
+  background: var(--surface);
+  color: var(--text-main);
+  font-size: 14px;
+  box-shadow: var(--clay-pressed);
+  transition: box-shadow 180ms ease;
+}
+
+.zd-input:focus {
+  outline: none;
+  box-shadow: inset -4px -4px 8px rgba(255, 255, 255, 0.7),
+    inset 4px 4px 8px rgba(0, 0, 0, 0.06),
+    0 0 0 3px rgba(201, 123, 75, 0.15);
+}
+
+.zd-input::placeholder {
+  color: var(--text-faint);
 }
 
 .zd-file-input {
-  padding: 10px 12px;
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  border-radius: var(--radius-input);
+  background: var(--surface);
+  color: var(--text-main);
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: var(--clay-raised-soft);
+  transition: box-shadow 180ms ease;
 }
 
-.zd-input:focus,
+.zd-file-input:hover {
+  box-shadow: var(--clay-raised);
+}
+
 .zd-file-input:focus {
   outline: none;
-  border-color: #5f97b9;
-  box-shadow: 0 0 0 3px rgba(31, 115, 183, 0.15);
+  box-shadow: var(--clay-raised), 0 0 0 3px rgba(201, 123, 75, 0.15);
 }
 
-.zd-tab-panel {
-  padding-top: 4px;
+select.zd-input {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237a7068' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  padding-right: 36px;
 }
+
+/* ========================================================================
+   Tables
+   ======================================================================== */
 
 .zd-table-wrap {
   overflow: auto;
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-raised-soft);
 }
 
 .zd-table {
@@ -637,134 +1248,150 @@ a {
 
 .zd-table th,
 .zd-table td {
-  padding: 12px 14px;
+  padding: 10px 14px;
   text-align: left;
   vertical-align: top;
 }
 
 .zd-table th {
-  background: var(--surface-muted);
   color: var(--text-faint);
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
 }
 
 .zd-table td {
   border-top: 1px solid var(--border);
   color: var(--text-main);
   overflow-wrap: anywhere;
+  font-size: 13px;
 }
+
+.zd-table tr:first-child td {
+  border-top: none;
+}
+
+/* ========================================================================
+   Connection Rows
+   ======================================================================== */
 
 .zd-connection-row {
   display: flex;
   gap: 12px;
   align-items: center;
   min-width: 0;
-  padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-muted);
+  padding: 12px 16px;
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-raised-soft);
 }
 
-.zd-connection-dot {
-  width: 12px;
-  height: 12px;
-  flex: 0 0 12px;
-  border-radius: 999px;
-}
-
-.zd-connection-dot.is-ok {
-  background: var(--success);
-}
-
-.zd-connection-dot.is-error {
-  background: var(--danger);
-}
-
-.zd-connection-meta strong {
-  display: block;
-  color: var(--text-strong);
-}
-
-.zd-connection-meta span {
-  color: var(--text-soft);
-  overflow-wrap: anywhere;
-}
+/* ========================================================================
+   Summary Grid
+   ======================================================================== */
 
 .zd-summary-grid {
   display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 }
 
 .zd-summary-item {
   padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-muted);
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-raised-soft);
 }
 
 .zd-summary-item dt {
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   color: var(--text-faint);
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .zd-summary-item dd {
   margin: 0;
   color: var(--text-strong);
+  font-size: 14px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
+/* ========================================================================
+   Status Pills
+   ======================================================================== */
+
 .zd-status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   max-width: 100%;
-  padding: 8px 12px;
-  border-radius: 999px;
-  font-size: 12px;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
+  background: var(--surface);
+  box-shadow: var(--clay-raised-soft);
 }
 
 .zd-status-pill::before {
   content: "";
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
   background: currentColor;
-}
-
-.zd-status-pill--neutral {
-  background: #eef3f5;
-  color: var(--brand-soft);
+  flex-shrink: 0;
 }
 
 .zd-status-pill--success {
-  background: var(--surface-success);
+  background: var(--success-soft);
   color: var(--success);
+  box-shadow: var(--clay-colored);
 }
 
 .zd-status-pill--warning {
-  background: var(--surface-warning);
+  background: var(--warning-soft);
   color: var(--warning);
+  box-shadow: var(--clay-colored);
 }
 
 .zd-status-pill--danger {
-  background: var(--surface-danger);
+  background: var(--danger-soft);
   color: var(--danger);
+  box-shadow: var(--clay-colored);
 }
 
+.zd-status-pill--neutral {
+  color: var(--text-faint);
+}
+
+/* ========================================================================
+   Inline Action Row
+   ======================================================================== */
+
+.zd-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ========================================================================
+   Log / Event Stream
+   ======================================================================== */
+
 .zd-log-frame {
+  border-radius: var(--radius-card);
   overflow: hidden;
+  background: var(--surface);
+  box-shadow: var(--clay-raised-soft);
 }
 
 .zd-log-header {
@@ -772,59 +1399,342 @@ a {
   justify-content: space-between;
   gap: 12px;
   align-items: center;
-  padding: 14px 16px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-muted);
 }
 
 .zd-log-header strong {
   color: var(--text-strong);
+  font-size: 13px;
 }
 
 .zd-log-header span {
   color: var(--text-soft);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .zd-log-body {
-  max-height: 320px;
+  max-height: 280px;
   overflow: auto;
-  padding: 14px 16px;
-  background: #0f2d33;
-  color: #d6ebee;
+  padding: 12px 16px;
+  background: #222730;
+  color: #c8cdd6;
   font-size: 12px;
   line-height: 1.7;
+  font-family: var(--font-mono);
+  border-radius: 10px;
+}
+
+.zd-log-body::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.zd-log-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius-pill);
 }
 
 .zd-empty-log {
-  color: #8bb0b8;
+  color: #888;
+  font-style: italic;
 }
+
+/* ========================================================================
+   Event Tabs — status-grouped log entries
+   ======================================================================== */
+
+.zd-event-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-wrap: nowrap;
+}
+
+.zd-event-tabs::-webkit-scrollbar {
+  height: 4px;
+}
+
+.zd-event-tabs::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-pill);
+}
+
+.zd-event-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.zd-event-tab:hover {
+  color: var(--text-main);
+  background: rgba(0,0,0,0.03);
+}
+
+.zd-event-tab.is-active {
+  color: var(--tab-color, var(--text-strong));
+  background: var(--tab-bg, var(--surface-accent));
+}
+
+.zd-event-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  opacity: 0.25;
+}
+
+.zd-event-tab.is-active .zd-event-tab-count {
+  opacity: 0.85;
+}
+
+.zd-event-body {
+  border-bottom: 1px solid var(--border);
+}
+
+.zd-event-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: background 120ms ease;
+}
+
+.zd-event-toggle:hover {
+  background: rgba(0,0,0,0.02);
+}
+
+.zd-event-arrow {
+  font-size: 8px;
+  color: var(--text-faint);
+  transition: transform 180ms ease;
+  flex-shrink: 0;
+}
+
+.zd-event-arrow.is-open {
+  transform: rotate(90deg);
+}
+
+/* ========================================================================
+   Pre Block
+   ======================================================================== */
 
 .zd-pre-block,
 .zd-report-pre {
   max-width: 100%;
   overflow: auto;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-muted);
+  padding: 14px 16px;
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-raised-soft);
   color: var(--text-main);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.6;
+  font-family: var(--font-mono);
+  font-size: 13px;
 }
 
 .zd-report-pre {
-  max-height: 520px;
+  max-height: 480px;
 }
 
-/* ---------- Rendered markdown report ------------------------------------- */
+.zd-pre-block::-webkit-scrollbar,
+.zd-report-pre::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.zd-pre-block::-webkit-scrollbar-thumb,
+.zd-report-pre::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-pill);
+}
+
+/* ========================================================================
+   Report Sections — tabbed + collapsible
+   ======================================================================== */
+
+.zd-report-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.zd-report-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px 2px;
+  scrollbar-width: thin;
+}
+
+.zd-report-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  padding: 8px 14px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: var(--clay-raised-soft);
+  transition: box-shadow 180ms ease, color 180ms ease, background-color 180ms ease;
+}
+
+.zd-report-tab:hover {
+  color: var(--text-main);
+  box-shadow: var(--clay-raised);
+}
+
+.zd-report-tab.is-active {
+  color: #ffffff;
+  background: var(--accent);
+  box-shadow: var(--clay-colored);
+}
+
+.zd-report-tab--warning.is-active { background: var(--warning); }
+.zd-report-tab--danger.is-active { background: var(--danger); }
+.zd-report-tab--success.is-active { background: var(--success); }
+.zd-report-tab--info.is-active { background: var(--info); }
+
+.zd-report-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: rgba(0, 0, 0, 0.08);
+  color: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.zd-report-tab.is-active .zd-report-tab-count {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.zd-report-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.zd-report-section {
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-raised-soft);
+  overflow: hidden;
+}
+
+.zd-report-section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 160ms ease;
+}
+
+.zd-report-section-header:hover {
+  background: rgba(0, 0, 0, 0.015);
+}
+
+.zd-report-section-header strong {
+  flex: 1;
+  font-size: 14px;
+  color: var(--text-strong);
+}
+
+.zd-report-section-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.zd-report-section-dot--neutral { background: var(--text-faint); }
+.zd-report-section-dot--info { background: var(--info); }
+.zd-report-section-dot--success { background: var(--success); }
+.zd-report-section-dot--warning { background: var(--warning); }
+.zd-report-section-dot--danger { background: var(--danger); }
+
+.zd-report-section-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-accent);
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.zd-report-section-arrow {
+  color: var(--text-faint);
+  font-size: 14px;
+  flex: 0 0 auto;
+}
+
+.zd-report-section-body {
+  padding: 0 18px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.zd-report-section-body.zd-report {
+  padding: 16px 18px 18px;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+/* ========================================================================
+   Rendered Markdown Report
+   ======================================================================== */
+
 .zd-report {
   max-width: 100%;
   padding: 24px 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-raised-soft);
   color: var(--text-main);
   line-height: 1.6;
   font-size: 14px;
@@ -834,7 +1744,7 @@ a {
 .zd-report h2,
 .zd-report h3,
 .zd-report h4 {
-  color: var(--text-strong, var(--text-main));
+  color: var(--text-strong);
   margin-top: 1.6em;
   margin-bottom: 0.5em;
   line-height: 1.25;
@@ -842,7 +1752,7 @@ a {
 
 .zd-report h1 {
   font-size: 22px;
-  border-bottom: 2px solid var(--brand);
+  border-bottom: 2px solid var(--accent);
   padding-bottom: 6px;
   margin-top: 0;
 }
@@ -867,7 +1777,7 @@ a {
 .zd-report li { margin: 2px 0; }
 
 .zd-report code {
-  background: var(--surface-muted);
+  color: var(--accent-strong);
   padding: 1px 5px;
   border-radius: 3px;
   font-family: var(--font-mono);
@@ -875,13 +1785,13 @@ a {
 }
 
 .zd-report pre {
-  background: var(--surface-muted);
+  background: var(--surface-accent);
   padding: 12px 14px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
   overflow-x: auto;
   font-size: 12px;
   line-height: 1.5;
+  box-shadow: var(--clay-pressed);
 }
 
 .zd-report pre code {
@@ -906,7 +1816,6 @@ a {
 }
 
 .zd-report th {
-  background: var(--surface-muted);
   font-weight: 600;
 }
 
@@ -917,9 +1826,7 @@ a {
 .zd-report blockquote {
   margin: 10px 0;
   padding: 6px 14px;
-  border-left: 3px solid var(--brand);
-  background: var(--surface-muted);
-  color: var(--text-muted, var(--text-main));
+  border-left: 3px solid var(--accent);
 }
 
 .zd-report hr {
@@ -929,14 +1836,19 @@ a {
 }
 
 .zd-report a {
-  color: var(--brand);
+  color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
-.zd-report a:hover { text-decoration: none; }
+.zd-report a:hover {
+  text-decoration: none;
+}
 
-/* ---------- Sound mute toggle ------------------------------------------- */
+/* ========================================================================
+   Sound Toggle
+   ======================================================================== */
+
 .zd-sound-toggle {
   display: inline-flex;
   align-items: center;
@@ -944,58 +1856,319 @@ a {
   min-height: 32px;
   padding: 4px 12px;
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  color: #143a41;
-  background: rgba(255, 255, 255, 0.88);
-  border: 1px solid rgba(18, 53, 59, 0.1);
-  border-radius: 999px;
+  color: var(--text-soft);
+  background: var(--surface);
+  border: none;
+  border-radius: var(--radius-pill);
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease;
+  box-shadow: var(--clay-raised-soft);
+  transition: box-shadow 120ms ease;
 }
 
 .zd-sound-toggle:hover {
-  background: rgba(255, 255, 255, 1);
-  border-color: rgba(18, 53, 59, 0.2);
+  box-shadow: var(--clay-raised);
 }
 
 .zd-sound-toggle[aria-pressed="true"] {
-  color: #7e9498;
-  background: rgba(215, 226, 223, 0.7);
+  color: var(--text-faint);
+  box-shadow: var(--clay-pressed);
 }
 
 .zd-sound-toggle-label {
-  font-size: 11px;
+  font-size: 10px;
 }
 
-.zd-orbit-loader {
+/* ========================================================================
+   Theme Toggle — animated celestial diorama
+   ======================================================================== */
+
+.zd-theme-toggle {
+  --tilt-x: 0deg;
+  --tilt-y: 0deg;
+  --glow-x: 50%;
+  --glow-y: 50%;
+
   position: relative;
-  width: 44px;
-  height: 44px;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  overflow: hidden;
+  background: linear-gradient(180deg, #7ec8e3 0%, #c6e4f3 55%, #e8f4fb 100%);
+  box-shadow: var(--clay-raised-soft);
+  transform: perspective(220px) rotateX(var(--tilt-x)) rotateY(var(--tilt-y));
+  transform-style: preserve-3d;
+  transition: transform 180ms ease-out, box-shadow 200ms ease;
 }
 
-.zd-orbit-loader span {
+.zd-theme-toggle:hover {
+  box-shadow: var(--clay-raised);
+}
+
+.zd-theme-toggle:active {
+  transform: perspective(220px) rotateX(var(--tilt-x)) rotateY(var(--tilt-y)) scale(0.94);
+}
+
+/* Sky gradient — swaps between day and night */
+.zd-theme-sky {
   position: absolute;
   inset: 0;
-  border-radius: 999px;
-  border: 2px solid transparent;
-  border-top-color: var(--brand);
-  animation: spin 1.1s linear infinite;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #7ec8e3 0%, #c6e4f3 55%, #e8f4fb 100%);
+  transition: opacity 600ms ease;
 }
 
-.zd-orbit-loader span:nth-child(2) {
-  inset: 6px;
-  border-top-color: var(--accent);
-  animation-duration: 1.5s;
-  animation-direction: reverse;
+.zd-theme-toggle[aria-pressed="true"] .zd-theme-sky {
+  background: linear-gradient(180deg, #0b0e16 0%, #161b2b 50%, #1d2438 100%);
 }
 
-.zd-orbit-loader span:nth-child(3) {
-  inset: 12px;
-  border-top-color: var(--text-faint);
-  animation-duration: 0.9s;
+/* Clouds — drift across the day sky, vanish at night */
+.zd-theme-cloud {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.7);
+  filter: blur(2px);
+  transition: opacity 500ms ease, transform 600ms ease;
 }
+
+.zd-theme-cloud--1 {
+  width: 16px;
+  height: 7px;
+  top: 60%;
+  left: -10%;
+  animation: zd-cloud-drift 9s linear infinite;
+}
+
+.zd-theme-cloud--2 {
+  width: 11px;
+  height: 5px;
+  top: 35%;
+  left: -10%;
+  animation: zd-cloud-drift 13s linear infinite 4s;
+}
+
+.zd-theme-toggle[aria-pressed="true"] .zd-theme-cloud {
+  opacity: 0;
+  transform: scale(0.5);
+}
+
+@keyframes zd-cloud-drift {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(70px); }
+}
+
+/* ---- Celestial bodies (sun + moon share a slot) ---- */
+
+.zd-theme-celestial {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transition: transform 650ms cubic-bezier(0.34, 1.2, 0.64, 1),
+    opacity 450ms ease;
+  z-index: 2;
+}
+
+/* Sun */
+.zd-theme-sun {
+  width: 20px;
+  height: 20px;
+  margin: -10px;
+}
+
+.zd-theme-toggle:not([aria-pressed="true"]) .zd-theme-sun {
+  transform: translateY(0) rotate(0deg);
+  opacity: 1;
+}
+
+.zd-theme-toggle[aria-pressed="true"] .zd-theme-sun {
+  transform: translateY(170%) rotate(160deg) scale(0.6);
+  opacity: 0;
+}
+
+.zd-theme-sun-body {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 32%, #fff8d6, #ffd54f 45%, #ff9d2e 100%);
+  box-shadow: 0 0 10px rgba(255, 193, 7, 0.7), 0 0 18px rgba(255, 152, 0, 0.35);
+}
+
+.zd-theme-rays {
+  position: absolute;
+  inset: -9px;
+  border-radius: 50%;
+  background: repeating-conic-gradient(
+    rgba(255, 196, 46, 0.55) 0deg 2.5deg,
+    transparent 2.5deg 45deg
+  );
+  -webkit-mask: radial-gradient(circle, transparent 38%, black 41%, black 100%);
+  mask: radial-gradient(circle, transparent 38%, black 41%, black 100%);
+  animation: zd-rays-spin 18s linear infinite;
+  transition: opacity 400ms ease;
+}
+
+.zd-theme-toggle[aria-pressed="true"] .zd-theme-rays {
+  opacity: 0;
+}
+
+@keyframes zd-rays-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Moon */
+.zd-theme-moon {
+  width: 18px;
+  height: 18px;
+  margin: -9px;
+}
+
+.zd-theme-toggle:not([aria-pressed="true"]) .zd-theme-moon {
+  transform: translateY(-170%) rotate(-30deg) scale(0.6);
+  opacity: 0;
+}
+
+.zd-theme-toggle[aria-pressed="true"] .zd-theme-moon {
+  transform: translateY(0) rotate(0deg);
+  opacity: 1;
+}
+
+.zd-theme-moon-body {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 33% 30%, #f4f5f9, #d0d4de 55%, #a3a8b5 100%);
+  box-shadow: 0 0 8px rgba(220, 224, 236, 0.4), 0 0 16px rgba(180, 190, 210, 0.2);
+}
+
+.zd-theme-crater {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(110, 116, 128, 0.35);
+  box-shadow: inset 0.5px 0.5px 1px rgba(0, 0, 0, 0.25);
+}
+
+.zd-theme-crater--1 { width: 5px; height: 5px; top: 2px; left: 3px; }
+.zd-theme-crater--2 { width: 3px; height: 3px; top: 8px; left: 9px; }
+.zd-theme-crater--3 { width: 4px; height: 4px; top: 10px; left: 3px; }
+
+/* ---- Stars ---- */
+
+.zd-theme-stars {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 500ms ease 200ms;
+  z-index: 1;
+}
+
+.zd-theme-toggle[aria-pressed="true"] .zd-theme-stars {
+  opacity: 1;
+}
+
+.zd-theme-star {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 3px rgba(255, 255, 255, 0.9);
+  animation: zd-twinkle 3s ease-in-out infinite;
+}
+
+@keyframes zd-twinkle {
+  0%, 100% { opacity: 0.15; transform: scale(0.5); }
+  50% { opacity: 1; transform: scale(1.4); }
+}
+
+/* ---- Shooting star ---- */
+
+.zd-theme-shooting-star {
+  position: absolute;
+  top: 18%;
+  right: 12%;
+  width: 16px;
+  height: 1.5px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.95));
+  border-radius: 1px;
+  opacity: 0;
+  transform: rotate(-32deg);
+  z-index: 1;
+}
+
+.zd-theme-toggle[aria-pressed="true"] .zd-theme-shooting-star {
+  animation: zd-shoot 6s ease-in 1.5s infinite;
+}
+
+@keyframes zd-shoot {
+  0% { transform: translate(0, 0) rotate(-32deg); opacity: 0; }
+  3% { opacity: 1; }
+  9% { transform: translate(-34px, 21px) rotate(-32deg); opacity: 0; }
+  100% { opacity: 0; }
+}
+
+/* ---- Glow ring on hover ---- */
+
+.zd-theme-ring {
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at var(--glow-x, 50%) var(--glow-y, 50%),
+    rgba(255, 255, 255, 0.25),
+    transparent 60%
+  );
+  opacity: 0;
+  transition: opacity 200ms ease;
+  z-index: 3;
+}
+
+.zd-theme-toggle:hover .zd-theme-ring {
+  opacity: 1;
+}
+
+/* ========================================================================
+   View Transitions — circular ink-reveal between themes
+   ======================================================================== */
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  z-index: 1;
+}
+
+::view-transition-new(root) {
+  z-index: 9999;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none !important;
+  }
+  .zd-theme-rays,
+  .zd-theme-star,
+  .zd-theme-shooting-star,
+  .zd-theme-cloud {
+    animation: none !important;
+  }
+}
+
+/* ========================================================================
+   Toast Notifications
+   ======================================================================== */
 
 .zd-toast-stack {
   position: fixed;
@@ -1004,17 +2177,17 @@ a {
   z-index: 40;
   display: grid;
   gap: 10px;
-  width: min(340px, calc(100vw - 32px));
+  width: min(320px, calc(100vw - 32px));
 }
 
 .zd-toast {
   padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-left-width: 4px;
-  border-radius: var(--radius-md);
-  background: #ffffff;
-  box-shadow: var(--shadow-sm);
-  animation: toastIn 180ms ease;
+  border: none;
+  border-left: 4px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--clay-toast);
+  animation: toastIn 200ms ease;
 }
 
 .zd-toast header {
@@ -1042,11 +2215,12 @@ a {
   background: transparent;
   color: currentColor;
   box-shadow: none;
+  min-height: auto;
 }
 
 .zd-toast--info {
-  border-left-color: var(--accent);
-  color: var(--accent);
+  border-left-color: var(--info);
+  color: var(--info);
 }
 
 .zd-toast--success {
@@ -1064,15 +2238,6 @@ a {
   color: var(--danger);
 }
 
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 @keyframes toastIn {
   from {
     opacity: 0;
@@ -1084,48 +2249,183 @@ a {
   }
 }
 
+/* ========================================================================
+   Progress Bar — clay extrusion
+   ======================================================================== */
+
+.zd-progress-track {
+  height: 12px;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  box-shadow: var(--clay-pressed);
+  overflow: hidden;
+}
+
+.zd-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  box-shadow: var(--clay-colored);
+  transition: width 800ms ease;
+}
+
+.zd-progress-fill.is-done {
+  background: var(--success);
+}
+
+.zd-progress-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+/* ========================================================================
+   Risk Badge
+   ======================================================================== */
+
+.zd-risk-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--surface);
+  box-shadow: var(--clay-raised-soft);
+}
+
+.zd-risk-badge--safe {
+  background: var(--success-soft);
+  color: var(--success);
+  box-shadow: var(--clay-colored);
+}
+
+.zd-risk-badge--moderate {
+  background: var(--warning-soft);
+  color: var(--warning);
+  box-shadow: var(--clay-colored);
+}
+
+.zd-risk-badge--destructive {
+  background: var(--danger-soft);
+  color: var(--danger);
+  box-shadow: var(--clay-colored);
+}
+
+/* ========================================================================
+   Undo Section
+   ======================================================================== */
+
+.zd-undo-section {
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-raised-soft);
+  overflow: hidden;
+}
+
+.zd-undo-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: background 120ms ease;
+  user-select: none;
+}
+
+.zd-undo-header:hover {
+  background: var(--surface-accent);
+}
+
+.zd-undo-header strong {
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.zd-undo-header .zd-undo-arrow {
+  transition: transform 200ms ease;
+  color: var(--text-faint);
+  font-size: 14px;
+}
+
+.zd-undo-header.is-open .zd-undo-arrow {
+  transform: rotate(90deg);
+}
+
+.zd-undo-body {
+  border-top: 1px solid var(--border);
+  padding: 16px;
+  display: grid;
+  gap: 16px;
+}
+
+/* ========================================================================
+   Responsive
+   ======================================================================== */
+
 @media (max-width: 1024px) {
-  .zd-admin-header,
   .zd-workspace-head {
     grid-template-columns: 1fr;
   }
 
-  .zd-topbar-meta {
-    justify-content: flex-start;
+  .zd-overview-grid {
+    flex-wrap: wrap;
   }
 }
 
 @media (max-width: 720px) {
   .zd-app-shell {
-    padding: 10px;
+    padding: 12px;
   }
 
-  .zd-admin-header,
+  .zd-admin-header {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 14px 16px;
+  }
+
+  .zd-topbar-meta {
+    justify-content: flex-start;
+  }
+
   .zd-workspace-body,
   .zd-workspace-head,
   .zd-step-tabs,
   .zd-section-tabs {
-    padding-left: 14px;
-    padding-right: 14px;
+    padding-left: 16px;
+    padding-right: 16px;
   }
 
-  .zd-admin-header {
+  .zd-workspace-head {
     padding-top: 16px;
-    padding-bottom: 16px;
   }
 
-  .zd-overview-grid,
   .zd-summary-grid,
   .zd-choice-grid {
     grid-template-columns: 1fr;
   }
 
   .zd-brand-title {
-    font-size: 24px;
+    font-size: 20px;
   }
 
   .zd-screen-title {
-    font-size: 21px;
+    font-size: 19px;
+  }
+
+  .zd-step-tab-copy small {
+    display: none;
+  }
+
+  .zd-overview-grid {
+    flex-direction: column;
+    width: 100%;
   }
 }
 

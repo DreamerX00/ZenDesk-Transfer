@@ -30,23 +30,38 @@ build/
 .eggs/
 
 # Node / UI
+node_modules/
 ui/node_modules/
 ui/dist/
 ui/assets/app-*
+ui/assets/asset-*
 
 # Editor / IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*.swn
+*~
+*.orig
+*.bak
+*.tmp
 .claude/
+.codex/
+.agents/
+.commandcode/
 
 # Environment files
 *.env
+.env.local
+.env.*.local
 
 # OS files
 .DS_Store
 Thumbs.db
+
+# Logs
+*.log
 
 # Test / coverage artifacts
 .pytest_cache/
@@ -58,7 +73,7 @@ documentation.md
 information.md
 implementation_plan.md
 Zenesk_Marketplace.md
-
+ui-redesign-plan.md
 
 /graphify-out/
 REPORT.md

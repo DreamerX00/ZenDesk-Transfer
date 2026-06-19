@@ -357,6 +357,7 @@ def _callback_page(*, ok: bool, message: str,
     """
     safe_message = html.escape(message)
     body_json = json.dumps({"ok": ok, "message": message, "payload": payload or {}})
+    body_json = body_json.replace("<", "\\u003c").replace(">", "\\u003e")
     html_body = f"""<!doctype html>
 <html>
 <head><meta charset="utf-8"><title>Connecting…</title></head>

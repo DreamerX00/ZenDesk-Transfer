@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { boot } from "./boot";
 import { isMuted, setMuted } from "./sound";
+import { ThemeToggle } from "./ThemeToggle";
 import { useStore } from "./state/store";
-import { PreFlight, btn } from "./steps/PreFlight";
+import { PreFlight } from "./steps/PreFlight";
 import { SourceAuth } from "./steps/SourceAuth";
 import { ChoosePhases } from "./steps/ChoosePhases";
 import { PreviewConfirm } from "./steps/PreviewConfirm";
@@ -31,51 +32,51 @@ type ChipTone =
 const STEPS: StepMeta[] = [
   {
     key: "preflight",
-    label: "Pre-flight",
-    eyebrow: "Health check",
-    title: "Verify both workspaces before a transfer starts",
+    label: "Status",
+    eyebrow: "Get started",
+    title: "Check that everything is ready to go",
     description:
-      "Check source and target readiness, inspect existing target configuration, and surface setup issues early.",
+      "See if your Zendesk accounts are connected and working before you start copying settings.",
   },
   {
     key: "source-auth",
-    label: "Connections",
+    label: "Connect",
     eyebrow: "Accounts",
-    title: "Manage source and target Zendesk connections",
+    title: "Link your source and target workspaces",
     description:
-      "Select a saved profile or add a new OAuth or token-based connection for each workspace.",
+      "Connect the Zendesk account you want to copy from, and the one you want to copy to.",
   },
   {
     key: "choose-phases",
-    label: "Phases",
-    eyebrow: "Scope",
-    title: "Choose what moves and how the run behaves",
+    label: "What to copy",
+    eyebrow: "Choose",
+    title: "Pick what gets moved and how it runs",
     description:
-      "Select migration phases, control user batching, and decide whether the run is dry-run or live.",
+      "Decide which settings to copy, how many users to include, and whether to do a dry run first.",
   },
   {
     key: "preview-confirm",
-    label: "Confirm",
+    label: "Review",
     eyebrow: "Review",
-    title: "Confirm the transfer settings before launch",
+    title: "Check everything before we start",
     description:
-      "Review the selected workspaces, phases, and write mode before the migration job is queued.",
+      "A quick look at your choices — workspaces, phases, and run mode — before the transfer begins.",
   },
   {
     key: "progress",
-    label: "Progress",
-    eyebrow: "Execution",
-    title: "Monitor the run with live telemetry",
+    label: "Watch",
+    eyebrow: "Running",
+    title: "Watch your transfer happen live",
     description:
-      "Track phase state, counters, and the backend event stream while the migration is in progress.",
+      "See real-time progress as each piece of your Zendesk configuration is copied over.",
   },
   {
     key: "report",
-    label: "Report",
+    label: "Done",
     eyebrow: "Results",
-    title: "Read the final migration output",
+    title: "See what was copied and what's next",
     description:
-      "Review the generated report, verify the final state, and prepare for the next transfer.",
+      "Review the final report, undo any changes if needed, or start a new transfer.",
   },
 ];
 
@@ -88,8 +89,6 @@ export default function App() {
   const setStep = useStore((s) => s.setStep);
   const bootError = useStore((s) => s.bootError);
   const bearer = useStore((s) => s.bearer);
-  const subdomain = useStore((s) => s.subdomain);
-  const userEmail = useStore((s) => s.userEmail);
   const dryRun = useStore((s) => s.dryRun);
   const formatTarget = useStore((s) => s.formatTarget);
   const selectedPhases = useStore((s) => s.selectedPhases);
@@ -239,7 +238,7 @@ export default function App() {
         </p>
         <pre className="zd-pre-block">{bootError}</pre>
         <div className="zd-inline-actions" style={{ marginTop: 16 }}>
-          <button onClick={() => void boot()} style={btn("primary")} type="button">
+          <button onClick={() => void boot()} className="zd-button zd-button--primary" type="button">
             Retry boot
           </button>
         </div>
@@ -253,10 +252,9 @@ export default function App() {
           <span />
           <span />
         </div>
-        <h3>Connecting the workspace</h3>
+        <h3>Getting things ready</h3>
         <p>
-          Establishing the app session, hydrating saved state, and preparing the
-          transfer workspace.
+          Starting up the app and checking your workspace. This should only take a moment.
         </p>
       </div>
     );
@@ -274,17 +272,16 @@ export default function App() {
               <div className="zd-admin-kicker">Zendesk workspace migration</div>
               <h1 className="zd-brand-title">Transfer</h1>
               <p className="zd-hero-copy">
-                Move configuration between Zendesk workspaces with a cleaner,
-                more compact flow that keeps the important controls visible.
+                Copy your Zendesk settings from one workspace to another — step by step.
               </p>
             </div>
           </div>
 
           <div className="zd-topbar-meta">
-            <MetaChip label="Tenant" value={subdomain ?? "Standalone"} tone="brand" />
-            <MetaChip label="Operator" value={userEmail ?? "Session pending"} tone="ghost" />
-            <MetaChip label="Run mode" value={mode} tone={modeTone} />
-            <MetaChip label="Live phase" value={livePhase} tone={phaseTone(livePhase)} />
+            <MetaChip label="Mode" value={mode} tone={modeTone} />
+            {livePhase !== "idle" ? (
+              <MetaChip label="Status" value={livePhase} tone={phaseTone(livePhase)} />
+            ) : null}
             <button
               type="button"
               className="zd-sound-toggle"
@@ -299,6 +296,7 @@ export default function App() {
               <span aria-hidden="true">{muted ? "🔇" : "🔊"}</span>
               <span className="zd-sound-toggle-label">{muted ? "Muted" : "Sound"}</span>
             </button>
+            <ThemeToggle />
           </div>
         </header>
 
@@ -311,28 +309,22 @@ export default function App() {
             </div>
 
             <div className="zd-overview-grid">
-              <OverviewTile
-                label="Connections"
-                value={`${connectedCount}/2 ready`}
-                detail={
-                  connectedCount === 2 ? "Both workspaces selected" : "Select source and target"
-                }
-              />
-              <OverviewTile
-                label="Phases"
-                value={selectedPhases.length > 0 ? selectedPhases.join(", ") : "None"}
-                detail={`${selectedPhases.length} active`}
-              />
-              <OverviewTile
-                label="Source"
-                value={sourceConnection?.subdomain ?? "Unassigned"}
-                detail={sourceConnection?.auth_kind === "oauth" ? "OAuth" : sourceConnection ? "API token" : "Waiting"}
-              />
-              <OverviewTile
-                label="Target"
-                value={targetConnection?.subdomain ?? "Unassigned"}
-                detail={targetConnection?.auth_kind === "oauth" ? "OAuth" : targetConnection ? "API token" : "Waiting"}
-              />
+              <div className="zd-overview-tile">
+                <b>Connections</b>
+                <strong>{connectedCount}/2 ready</strong>
+              </div>
+              <div className="zd-overview-tile">
+                <b>Phases</b>
+                <strong>{selectedPhases.length > 0 ? selectedPhases.join(", ") : "None"}</strong>
+              </div>
+              <div className="zd-overview-tile">
+                <b>From</b>
+                <strong>{sourceConnection?.subdomain ?? "—"}</strong>
+              </div>
+              <div className="zd-overview-tile">
+                <b>To</b>
+                <strong>{targetConnection?.subdomain ?? "—"}</strong>
+              </div>
             </div>
           </div>
 
@@ -396,24 +388,6 @@ function MetaChip({
     <div className={`zd-chip zd-chip--${tone}`}>
       <b>{label}</b>
       <span>{value}</span>
-    </div>
-  );
-}
-
-function OverviewTile({
-  label,
-  value,
-  detail,
-}: {
-  label: string;
-  value: string;
-  detail: string;
-}) {
-  return (
-    <div className="zd-overview-tile">
-      <b>{label}</b>
-      <strong>{value}</strong>
-      <span>{detail}</span>
     </div>
   );
 }

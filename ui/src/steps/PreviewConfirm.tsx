@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { startMigration } from "../api/backend";
 import { useStore } from "../state/store";
-import { btn } from "./PreFlight";
 
 export function PreviewConfirm() {
   const setStep = useStore((s) => s.setStep);
@@ -23,12 +22,8 @@ export function PreviewConfirm() {
   const targetLabel = describeConnection(targetConnections, targetConnectionId);
 
   async function confirm() {
-    if (!sourceConnectionId || !targetConnectionId) {
-      return;
-    }
-
-    setErr(null);
-    setBusy(true);
+    if (!sourceConnectionId || !targetConnectionId) return;
+    setErr(null); setBusy(true);
     try {
       const response = await startMigration({
         source_connection_id: sourceConnectionId,
@@ -47,62 +42,62 @@ export function PreviewConfirm() {
     }
   }
 
+  const isDestructive = formatTarget && !dryRun;
+
   return (
     <div className="zd-stack">
-      <div className="zd-panel zd-panel--raised">
+      <div className="zd-card zd-card--raised">
         <div className="zd-panel-header">
           <div>
-            <h3>Launch summary</h3>
+            <h3>Here's what you've set up</h3>
             <p className="zd-body-copy" style={{ margin: "6px 0 0" }}>
-              One final review pass before the migration job is enqueued on the
-              backend.
+              Take a last look before we start the transfer.
             </p>
           </div>
-          <div className={`zd-status-pill ${dryRun ? "zd-status-pill--neutral" : formatTarget ? "zd-status-pill--danger" : "zd-status-pill--success"}`}>
-            {dryRun ? "Dry run" : formatTarget ? "Destructive write" : "Live write"}
-          </div>
+          <span className={`zd-status-badge ${dryRun ? "zd-status-badge--neutral" : isDestructive ? "zd-status-badge--danger" : "zd-status-badge--success"}`}>
+            {dryRun ? "Preview" : isDestructive ? "Will modify target" : "Live copy"}
+          </span>
         </div>
 
         <dl className="zd-summary-grid">
           <div className="zd-summary-item">
-            <dt>Source</dt>
+            <dt>Copy from</dt>
             <dd>{sourceLabel}</dd>
           </div>
           <div className="zd-summary-item">
-            <dt>Target</dt>
+            <dt>Copy to</dt>
             <dd>{targetLabel}</dd>
           </div>
           <div className="zd-summary-item">
-            <dt>Phases</dt>
-            <dd>{selectedPhases.join(", ") || "None"}</dd>
+            <dt>What to copy</dt>
+            <dd>{selectedPhases.join(", ") || "Nothing selected"}</dd>
           </div>
           <div className="zd-summary-item">
             <dt>Max users</dt>
             <dd>{maxUsers ?? "All"}</dd>
           </div>
           <div className="zd-summary-item">
-            <dt>Offset</dt>
+            <dt>Start from</dt>
             <dd>{usersFrom}</dd>
           </div>
           <div className="zd-summary-item">
-            <dt>Format target</dt>
+            <dt>Clear target first</dt>
             <dd>{formatTarget ? "Yes" : "No"}</dd>
           </div>
         </dl>
       </div>
 
-      {formatTarget && !dryRun ? (
+      {isDestructive ? (
         <div className="zd-callout zd-callout--danger">
-          <strong>Destructive run warning:</strong> formatting the target removes
-          user-created configuration before recreation. A backup is taken by the
-          backend, but this action is not reversible from the UI itself.
+          <strong>This will change your target account.</strong> Existing settings will be
+          deleted before copying. A backup is saved automatically so you can undo later.
         </div>
       ) : null}
 
       {dryRun ? (
         <div className="zd-callout zd-callout--info">
-          <strong>Safe preview:</strong> this run will execute the migration flow
-          without writing data into the target Zendesk tenant.
+          <strong>This is a preview run.</strong> No changes will be made to your target account.
+          You'll see the full process without any risk.
         </div>
       ) : null}
 
@@ -112,24 +107,18 @@ export function PreviewConfirm() {
         <button
           onClick={() => setStep("choose-phases")}
           disabled={busy}
-          style={btn("secondary")}
+          className="zd-button zd-button--secondary"
           type="button"
         >
-          {"<- Back"}
+          Back
         </button>
         <button
           onClick={confirm}
           disabled={busy || !sourceConnectionId || !targetConnectionId}
-          style={btn(
-            busy || !sourceConnectionId || !targetConnectionId
-              ? "disabled"
-              : dryRun
-                ? "primary"
-                : "danger",
-          )}
+          className={`zd-button ${busy || !sourceConnectionId || !targetConnectionId ? "" : isDestructive ? "zd-button--danger" : "zd-button--primary"}`}
           type="button"
         >
-          {busy ? "Starting..." : dryRun ? "Start dry run ->" : "Start migration ->"}
+          {busy ? "Starting..." : dryRun ? "Start preview" : "Start transfer"}
         </button>
       </div>
     </div>
@@ -140,15 +129,9 @@ function describeConnection(
   list: ReturnType<typeof useStore.getState>["sourceConnections"],
   id: string | null,
 ): string {
-  if (!id) {
-    return "-";
-  }
-
+  if (!id) return "-";
   const match = list.find((connection) => connection.id === id);
-  if (!match) {
-    return id;
-  }
-
+  if (!match) return id;
   const authLabel = match.auth_kind === "oauth" ? "OAuth" : "API token";
   return `${match.subdomain}.zendesk.com · ${authLabel}`;
 }

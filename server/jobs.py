@@ -596,8 +596,15 @@ def run_restore(
             pass
 
         from pathlib import Path
-        from src.backup import restore as bk_restore
+        from src.backup import restore as bk_restore, BACKUPS_DIR, SAFE_TIMESTAMP_RE
         backup_dir = Path(backup_path)
+        resolved = backup_dir.resolve()
+        try:
+            resolved.relative_to(BACKUPS_DIR.resolve())
+        except ValueError:
+            raise ValueError("backup path must be inside the backups directory")
+        if not SAFE_TIMESTAMP_RE.match(backup_dir.name):
+            raise ValueError("invalid backup directory name")
         if not backup_dir.is_dir():
             raise ValueError(f"backup directory not found: {backup_path}")
         created = bk_restore(target, backup_dir)

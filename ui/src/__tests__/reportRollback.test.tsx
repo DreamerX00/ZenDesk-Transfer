@@ -43,7 +43,7 @@ describe("ReportRollback", () => {
     });
 
     expect(getReport).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Fetching verify output")).toBeTruthy();
+    expect(screen.getByText("Waiting for the report to be ready...")).toBeTruthy();
 
     await act(async () => {
       vi.advanceTimersByTime(1500);
@@ -63,7 +63,7 @@ describe("ReportRollback", () => {
       await Promise.resolve();
     });
 
-    expect(await screen.findByText("No active report selected")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open history" })).toBeTruthy();
+    expect(await screen.findByText("No report yet")).toBeTruthy();
+    expect(await screen.findByText("Run a transfer first to see the results here.")).toBeTruthy();
   });
 });
