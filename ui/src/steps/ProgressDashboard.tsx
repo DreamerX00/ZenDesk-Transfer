@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cancelJob, getJobStatus, listBackups, startCleanup, startRestore, startRollback } from "../api/backend";
 import { playError, playSuccess } from "../sound";
 import { useStore } from "../state/store";
@@ -248,6 +248,40 @@ function EventDisplay({ records }: { records: LogRecord[] }) {
   });
 
   const [expanded, setExpanded] = useState(true);
+  const [blinking, setBlinking] = useState<Set<ActionType>>(new Set());
+  const prevCounts = useRef<Record<string, number>>({});
+  const firstRun = useRef(true);
+
+  useEffect(() => {
+    const newBlinks = new Set<ActionType>();
+    for (const action of actions) {
+      const prev = prevCounts.current[action] ?? 0;
+      const curr = records.filter((r) => r.action === action).length;
+      if (!firstRun.current && curr > prev) {
+        newBlinks.add(action);
+      }
+      prevCounts.current[action] = curr;
+    }
+    firstRun.current = false;
+    if (newBlinks.size > 0) {
+      setBlinking((prev) => {
+        const next = new Set(prev);
+        for (const a of newBlinks) next.add(a);
+        return next;
+      });
+      const timer = setTimeout(() => setBlinking(new Set()), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [records]);
+
+  const clearBlink = useCallback((action: ActionType) => {
+    setBlinking((prev) => {
+      if (!prev.has(action)) return prev;
+      const next = new Set(prev);
+      next.delete(action);
+      return next;
+    });
+  }, []);
 
   const visible = grouped[activeTab] ?? [];
   // Labels and colors for each tab
@@ -272,8 +306,8 @@ function EventDisplay({ records }: { records: LogRecord[] }) {
         {actions.map((action) => (
           <button
             key={action}
-            className={`zd-event-tab${activeTab === action ? " is-active" : ""}`}
-            onClick={() => { setActiveTab(action); setExpanded(true); }}
+            className={`zd-event-tab${activeTab === action ? " is-active" : ""}${blinking.has(action) ? " is-blinking" : ""}`}
+            onClick={() => { setActiveTab(action); setExpanded(true); clearBlink(action); }}
             type="button"
             style={{
               "--tab-color": tabMeta[action].color,

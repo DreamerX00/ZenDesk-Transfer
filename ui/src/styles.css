@@ -1507,6 +1507,47 @@ select.zd-input {
   opacity: 0.85;
 }
 
+/* Blinking tabs — pulse when new live entries arrive */
+.zd-event-tab.is-blinking:not(.is-active) {
+  color: var(--tab-color, var(--text-soft));
+}
+
+.zd-event-tab.is-blinking {
+  animation: zd-tab-glow 1s ease-in-out infinite;
+}
+
+.zd-event-tab.is-blinking .zd-event-tab-count {
+  animation: zd-tab-count-pulse 1s ease-in-out infinite;
+}
+
+@keyframes zd-tab-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow: 0 0 0 2px var(--tab-color, var(--accent)),
+                0 0 14px 3px var(--tab-color, var(--accent));
+  }
+}
+
+@keyframes zd-tab-count-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zd-event-tab.is-blinking,
+  .zd-event-tab.is-blinking .zd-event-tab-count {
+    animation: none !important;
+  }
+  .zd-event-tab.is-blinking {
+    box-shadow: 0 0 0 2px var(--tab-color, var(--accent));
+  }
+  .zd-event-tab.is-blinking .zd-event-tab-count {
+    opacity: 0.85;
+  }
+}
+
 .zd-event-body {
   border-bottom: 1px solid var(--border);
 }
