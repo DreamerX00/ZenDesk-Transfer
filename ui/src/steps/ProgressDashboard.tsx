@@ -230,18 +230,18 @@ function Counters({ status }: { status: Record<string, string> }) {
   );
 }
 
-function EventDisplay({ records }: { records: LogRecord[] }) {
-  type ActionType = "CREATED" | "PURGED" | "SKIPPED" | "FAILED" | "MANUAL" | "NOTE";
-  const actions: ActionType[] = ["CREATED", "FAILED", "SKIPPED", "PURGED", "MANUAL", "NOTE"];
+type ActionType = "CREATED" | "PURGED" | "SKIPPED" | "FAILED" | "MANUAL" | "NOTE";
+const LOG_ACTIONS: ActionType[] = ["CREATED", "FAILED", "SKIPPED", "PURGED", "MANUAL", "NOTE"];
+const BLINK_DURATION_MS = 4000;
 
-  const grouped = actions.reduce((acc, action) => {
+function EventDisplay({ records }: { records: LogRecord[] }) {
+  const grouped = LOG_ACTIONS.reduce((acc, action) => {
     acc[action] = records.filter((r) => r.action === action);
     return acc;
   }, {} as Record<ActionType, LogRecord[]>);
 
   const [activeTab, setActiveTab] = useState<ActionType>(() => {
-    // Default to first non-empty tab, or CREATED.
-    for (const action of actions) {
+    for (const action of LOG_ACTIONS) {
       if (grouped[action].length > 0) return action;
     }
     return "CREATED";
@@ -251,30 +251,64 @@ function EventDisplay({ records }: { records: LogRecord[] }) {
   const [blinking, setBlinking] = useState<Set<ActionType>>(new Set());
   const prevCounts = useRef<Record<string, number>>({});
   const firstRun = useRef(true);
+  const blinkTimers = useRef<Partial<Record<ActionType, ReturnType<typeof setTimeout>>>>({});
+
+  // Per-action blink expiry — each tab gets its own independent timer.
+  const startBlink = useCallback((action: ActionType) => {
+    const existing = blinkTimers.current[action];
+    if (existing) clearTimeout(existing);
+    blinkTimers.current[action] = setTimeout(() => {
+      setBlinking((prev) => {
+        if (!prev.has(action)) return prev;
+        const next = new Set(prev);
+        next.delete(action);
+        return next;
+      });
+      delete blinkTimers.current[action];
+    }, BLINK_DURATION_MS);
+  }, []);
 
   useEffect(() => {
-    const newBlinks = new Set<ActionType>();
-    for (const action of actions) {
+    const newBlinks: ActionType[] = [];
+    for (const action of LOG_ACTIONS) {
       const prev = prevCounts.current[action] ?? 0;
       const curr = records.filter((r) => r.action === action).length;
       if (!firstRun.current && curr > prev) {
-        newBlinks.add(action);
+        newBlinks.push(action);
       }
       prevCounts.current[action] = curr;
     }
     firstRun.current = false;
-    if (newBlinks.size > 0) {
+
+    if (newBlinks.length > 0) {
       setBlinking((prev) => {
         const next = new Set(prev);
         for (const a of newBlinks) next.add(a);
         return next;
       });
-      const timer = setTimeout(() => setBlinking(new Set()), 4000);
-      return () => clearTimeout(timer);
+      for (const action of newBlinks) {
+        startBlink(action);
+      }
     }
-  }, [records]);
+  }, [records, startBlink]);
+
+  // Clear all timers on unmount.
+  useEffect(() => {
+    const timers = blinkTimers.current;
+    return () => {
+      for (const action of LOG_ACTIONS) {
+        const t = timers[action];
+        if (t) clearTimeout(t);
+      }
+    };
+  }, []);
 
   const clearBlink = useCallback((action: ActionType) => {
+    const timer = blinkTimers.current[action];
+    if (timer) {
+      clearTimeout(timer);
+      delete blinkTimers.current[action];
+    }
     setBlinking((prev) => {
       if (!prev.has(action)) return prev;
       const next = new Set(prev);
@@ -284,7 +318,6 @@ function EventDisplay({ records }: { records: LogRecord[] }) {
   }, []);
 
   const visible = grouped[activeTab] ?? [];
-  // Labels and colors for each tab
   const tabMeta: Record<ActionType, { label: string; color: string; bg: string }> = {
     CREATED: { label: "Copied", color: "#4caf50", bg: "rgba(76,175,80,0.1)" },
     FAILED: { label: "Failed", color: "#f44336", bg: "rgba(244,67,54,0.1)" },
@@ -301,9 +334,8 @@ function EventDisplay({ records }: { records: LogRecord[] }) {
         <span>{records.length} total entries</span>
       </div>
 
-      {/* Tabs by status */}
       <div className="zd-event-tabs">
-        {actions.map((action) => (
+        {LOG_ACTIONS.map((action) => (
           <button
             key={action}
             className={`zd-event-tab${activeTab === action ? " is-active" : ""}${blinking.has(action) ? " is-blinking" : ""}`}
