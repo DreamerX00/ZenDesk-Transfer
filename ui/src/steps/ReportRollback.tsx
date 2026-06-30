@@ -45,6 +45,13 @@ export function ReportRollback() {
     setLoading(true); setErr(null); setReport(null); setParseErr(null); setRetryCount(0);
 
     const load = async () => {
+      // The timeout that triggered this invocation (if any) has already
+      // fired, so clear the handle. Otherwise a *successful* retry would
+      // see the stale, non-null `timer` in the `finally` below and skip
+      // `setLoading(false)`, leaving the UI stuck on "Waiting…". A new
+      // retry scheduled within this run will reassign `timer` before the
+      // `finally` runs, which is exactly what the guard should react to.
+      timer = null;
       try {
         const next = await getReport(migrationId);
         if (cancelled) return;

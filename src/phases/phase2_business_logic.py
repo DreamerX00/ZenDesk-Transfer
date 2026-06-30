@@ -19,7 +19,11 @@ from typing import Dict, List, Optional
 
 from src.client import ZendeskClient, ZendeskAPIError, ZendeskNetworkError
 from src.importer import import_resource, load_id_map
-from src.remapper import remap_form_conditions, remap_macro_actions
+from src.remapper import (
+    remap_form_conditions,
+    remap_macro_actions,
+    find_subdomain_references,
+)
 from src.utils import logger
 
 
@@ -129,8 +133,12 @@ def run(source: ZendeskClient, target: ZendeskClient,
             conflict_mode="replace",
         )
     else:
-        logger.log_skipped(
-            "group_sla_policies", "N/A", "Not available on this plan"
+        logger.log_manual(
+            "group_sla_policies",
+            "No Group SLA policies were migrated. This is expected if the "
+            "source isn't Enterprise or has none. If the source DOES have "
+            "Group SLA policies, verify the export step succeeded — an empty "
+            "export and a plan restriction look identical here.",
         )
 
     # ---- 3.9  Business Hours Schedules ------------------------------- #
@@ -160,9 +168,12 @@ def run(source: ZendeskClient, target: ZendeskClient,
             conflict_mode="replace",
         )
     else:
-        logger.log_skipped(
-            "routing_attributes", "N/A",
-            "None in source or not on Enterprise plan"
+        logger.log_manual(
+            "routing_attributes",
+            "No routing attributes were migrated. Expected if the source "
+            "isn't Enterprise or has none. If the source DOES use skills-based "
+            "routing, verify the export step succeeded — an empty export and a "
+            "plan restriction look identical here.",
         )
 
     # ---- 3.11  Dynamic Content --------------------------------------- #
@@ -192,10 +203,53 @@ def run(source: ZendeskClient, target: ZendeskClient,
         conflict_mode="replace",
     )
 
+    # ---- 3.13  Source-subdomain reference scan ----------------------- #
+    # The target brand gets a freshly-generated subdomain, so any hard-coded
+    # "<source>.zendesk.com" URL embedded in macro comments, dynamic content,
+    # or triggers will break. We don't auto-rewrite (risk of corrupting
+    # legitimate references) — instead we flag the affected items as MANUAL.
+    _scan_subdomain_references(source, exports)
+
     from src.importer import flush_id_map
     flush_id_map(id_map)
     logger.success("Phase 3 — Business Logic complete.")
     return id_map
+
+
+def _scan_subdomain_references(
+    source: ZendeskClient, exports: Dict[str, List[Dict]],
+) -> None:
+    """Report resources that embed the source account's subdomain host."""
+    src_sub = getattr(source, "subdomain", "") or ""
+    if not src_sub:
+        return
+
+    # (export_key, name_field) for the content-bearing resources most likely
+    # to contain portal URLs.
+    scan_targets = [
+        ("macros", "title"),
+        ("dynamic_content_items", "name"),
+        ("triggers", "title"),
+        ("automations", "title"),
+    ]
+    flagged = 0
+    for export_key, name_field in scan_targets:
+        for item in exports.get(export_key, []) or []:
+            if not isinstance(item, dict):
+                continue
+            if find_subdomain_references(item, src_sub):
+                flagged += 1
+                logger.log_manual(
+                    export_key,
+                    f"'{item.get(name_field, item.get('id'))}' contains a "
+                    f"hard-coded '{src_sub}.zendesk.com' URL. Update it to the "
+                    "target brand's subdomain — it was migrated verbatim.",
+                )
+    if flagged:
+        logger.warn(
+            f"Found {flagged} resource(s) embedding the source subdomain "
+            f"'{src_sub}.zendesk.com'. See MANUAL entries in the report."
+        )
 
 
 # ------------------------------------------------------------------ #

@@ -35,7 +35,9 @@ describe("ReportRollback", () => {
     vi.useFakeTimers();
     getReport
       .mockRejectedValueOnce(new Error("report not found yet"))
-      .mockResolvedValueOnce("# Migration Report\n\nReady now");
+      .mockResolvedValueOnce(
+        "# Migration Report\n\n## Summary\n\nReady now\n",
+      );
 
     await act(async () => {
       render(<ReportRollback />);
@@ -46,13 +48,18 @@ describe("ReportRollback", () => {
     expect(screen.getByText("Waiting for the report to be ready...")).toBeTruthy();
 
     await act(async () => {
-      vi.advanceTimersByTime(1500);
-      await Promise.resolve();
-      await Promise.resolve();
+      // advanceTimersByTimeAsync flushes the promise the retry kicks off
+      // (getReport → setReport) between timer ticks.
+      await vi.advanceTimersByTimeAsync(1500);
     });
 
     expect(getReport).toHaveBeenCalledTimes(2);
-    expect(screen.getByText("Ready now")).toBeTruthy();
+    // The report markdown is rendered via dangerouslySetInnerHTML and split
+    // into sections, so "Ready now" lives inside an injected HTML node rather
+    // than a discrete text element. Assert on the rendered document text and
+    // confirm the "Waiting…" placeholder is gone.
+    expect(document.body.textContent).toContain("Ready now");
+    expect(screen.queryByText("Waiting for the report to be ready...")).toBeNull();
   });
 
   it("shows a clear empty state when there is no active migration id", async () => {

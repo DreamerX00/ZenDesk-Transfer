@@ -34,6 +34,46 @@ describe("computeEstimate", () => {
     expect(estimate.phaseElapsedSec).toBe(15);
     expect(estimate.itemsPerSec).toBeNull();
     expect(estimate.etaSec).toBeCloseTo(450, 6);
+    // Weight-based fraction for the first phase (extract, weight 0.05) of
+    // selected {extract, 1-foundation, 5-users}; totalWeight = 0.60.
+    // withinPhase = 1 - 1/(1 + 15/20) = 0.428571…
+    // doneWeight = 0.05 * 0.428571 = 0.0214286 → /0.60 = 0.0357143.
+    const within = 1 - 1 / (1 + 15 / 20);
+    expect(estimate.progressFraction).toBeCloseTo((0.05 * within) / 0.6, 6);
+  });
+
+  it("reports progressFraction = 1 on completion and null while too noisy", () => {
+    const done = computeEstimate({
+      status: {
+        phase: "completed",
+        started_at: at(0),
+        phase_started_at: at(0),
+        finished_at: at(100),
+      },
+      events: [],
+      now: BASE_MS + (100 * 1000),
+    });
+    expect(done.progressFraction).toBe(1);
+
+    const tooEarly = computeEstimate({
+      status: { phase: "1-foundation", started_at: at(0), phase_started_at: at(0) },
+      events: [],
+      now: BASE_MS + (3 * 1000), // < MIN_PHASE_ELAPSED_SEC_FOR_ETA
+    });
+    expect(tooEarly.progressFraction).toBeNull();
+  });
+
+  it("progressFraction grows monotonically as elapsed increases", () => {
+    const base = {
+      status: { phase: "extract", started_at: at(0), phase_started_at: at(0) },
+      events: [],
+      selectedPhases: new Set(["extract", "1-foundation", "5-users"]),
+    };
+    const early = computeEstimate({ ...base, now: BASE_MS + 15 * 1000 });
+    const later = computeEstimate({ ...base, now: BASE_MS + 60 * 1000 });
+    expect(early.progressFraction).not.toBeNull();
+    expect(later.progressFraction).not.toBeNull();
+    expect(later.progressFraction!).toBeGreaterThan(early.progressFraction!);
   });
 
   it("waits for enough completed items before showing ETA", () => {

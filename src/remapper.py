@@ -585,6 +585,37 @@ def _remap_assignee_composite(value: Any, id_map: Dict,
     return f"{new_group}/{new_user}"
 
 
+def find_subdomain_references(obj: Any, source_subdomain: str,
+                              _depth: int = 0) -> bool:
+    """
+    Recursively scan a payload for any string containing the source account's
+    Zendesk subdomain host (e.g. "acme.zendesk.com"). Returns True as soon as
+    one is found.
+
+    Used to surface (not auto-rewrite) hard-coded source-portal URLs in macros,
+    dynamic content, and articles, which break after migration because the
+    target brand gets a freshly-generated subdomain. Auto-rewriting is unsafe
+    (it could corrupt legitimate references), so callers report a MANUAL item.
+    """
+    if not source_subdomain or _depth > MAX_DEPTH:
+        return False
+    needle = f"{source_subdomain}.zendesk.com".lower()
+
+    if isinstance(obj, str):
+        return needle in obj.lower()
+    if isinstance(obj, dict):
+        return any(
+            find_subdomain_references(v, source_subdomain, _depth + 1)
+            for v in obj.values()
+        )
+    if isinstance(obj, list):
+        return any(
+            find_subdomain_references(v, source_subdomain, _depth + 1)
+            for v in obj
+        )
+    return False
+
+
 def sanitize_custom_field_values(values: Any) -> Optional[Dict]:
     """
     Sanitize a user/organization `custom_fields` (a.k.a. `user_fields` /

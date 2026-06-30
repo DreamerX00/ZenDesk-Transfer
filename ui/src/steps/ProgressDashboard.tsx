@@ -159,17 +159,18 @@ export function ProgressDashboard() {
           </div>
         </div>
 
-        {!isTerminal && estimate.etaSec !== null && estimate.phaseElapsedSec !== null ? (
+        {!isTerminal && estimate.progressFraction !== null && estimate.phaseElapsedSec !== null ? (
           <div style={{ marginTop: 16 }}>
             <ProgressBar
+              fraction={estimate.progressFraction}
               elapsed={estimate.totalElapsedSec ?? 0}
-              remaining={estimate.etaSec}
+              remaining={estimate.etaSec ?? 0}
               done={false}
             />
           </div>
         ) : isTerminal && phase === "completed" ? (
           <div style={{ marginTop: 16 }}>
-            <ProgressBar elapsed={1} remaining={0} done={true} />
+            <ProgressBar fraction={1} elapsed={estimate.totalElapsedSec ?? 1} remaining={0} done={true} />
           </div>
         ) : null}
       </div>
@@ -383,9 +384,22 @@ function EventDisplay({ records }: { records: LogRecord[] }) {
   );
 }
 
-function ProgressBar({ elapsed, remaining, done }: { elapsed: number; remaining: number; done: boolean }) {
-  const total = elapsed + remaining;
-  const pct = total > 0 ? Math.min(100, Math.max(0, (elapsed / total) * 100)) : 0;
+function ProgressBar({
+  fraction,
+  elapsed,
+  remaining,
+  done,
+}: {
+  fraction: number;
+  elapsed: number;
+  remaining: number;
+  done: boolean;
+}) {
+  // Drive the fill from the completion fraction (monotonic, grows
+  // left→right) rather than elapsed/(elapsed+remaining), which stayed
+  // flat because the ETA scales with elapsed. The CSS `transition: width`
+  // on .zd-progress-fill animates each width change smoothly.
+  const pct = done ? 100 : Math.min(100, Math.max(0, fraction * 100));
 
   return (
     <div>

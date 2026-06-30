@@ -9,7 +9,7 @@ const PHASES: Array<{
   {
     number: 1,
     label: "Settings & Structure",
-    description: "Groups, ticket forms, custom fields, organizations, and brands.",
+    description: "Groups, ticket forms, custom fields (with their saved values), organizations, and brands.",
   },
   {
     number: 2,
@@ -29,7 +29,7 @@ const PHASES: Array<{
   {
     number: 5,
     label: "Users & Agents",
-    description: "End-user and agent accounts. This is a high-risk operation.",
+    description: "End-user and agent accounts, plus their group and organization memberships and any personal-view / article ownership. This is a high-risk operation.",
     warning: "Migrating users can trigger Zendesk's account suspension detection. Use with caution.",
   },
 ];

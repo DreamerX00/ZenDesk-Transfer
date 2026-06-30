@@ -434,7 +434,145 @@ def run(
     _migrate_group_memberships(target, id_map, exports.get("group_memberships", []))
     _migrate_org_memberships(target, id_map, exports.get("organization_memberships", []))
 
+    # ---- Deferred ownership reassignment (requires users) ------------ #
+    # Views (Phase 2) and Help Center articles (Phase 3) are created BEFORE
+    # users exist, so their owner_id / author_id are stripped at create time
+    # to avoid 422s. Now that users are in the id_map we can reassign owners
+    # for the subset whose owner actually migrated. Owners that didn't migrate
+    # are left as the target default (admin / shared), logged as MANUAL.
+    _reassign_view_owners(target, id_map, exports.get("views", []))
+    _reassign_article_authors(target, id_map, exports.get("articles", []))
+
     flush_id_map(id_map)
+
+
+def _reassign_view_owners(
+    target: ZendeskClient, id_map: Dict, source_views: List[Dict],
+) -> None:
+    """
+    Restore personal-view ownership: for each source view that had an
+    owner_id, if both the view and the owner user migrated, PUT the target
+    view's owner. Views whose owner didn't migrate are left shared/default.
+    """
+    if not source_views:
+        return
+    view_map = id_map.get("views")
+    user_map = id_map.get("users")
+    if not isinstance(view_map, dict) or not isinstance(user_map, dict):
+        return
+
+    relevant = [v for v in source_views
+                if isinstance(v, dict) and v.get("owner_id") is not None]
+    if not relevant:
+        return
+
+    logger.section("Phase 5d — View Ownership Reassignment")
+    reassigned = skipped = failed = 0
+    for v in relevant:
+        src_id = v.get("id")
+        t_view = view_map.get(str(src_id))
+        if not t_view:
+            continue  # view itself wasn't migrated
+        t_owner = user_map.get(str(v.get("owner_id")))
+        if not t_owner:
+            logger.log_manual(
+                "views",
+                f"View '{v.get('title', src_id)}' was owned by source user "
+                f"{v.get('owner_id')} which was not migrated — left as the "
+                "target default. Reassign the owner manually if required.",
+            )
+            skipped += 1
+            continue
+        try:
+            resp = target.put(
+                f"views/{t_view}",
+                {"view": {"owner_id": int(t_owner) if str(t_owner).isdigit() else t_owner}},
+            )
+            if isinstance(resp, dict) and resp.get("dry_run"):
+                skipped += 1
+                continue
+            logger.log_created("view_owner", src_id, t_view,
+                               f"owner→{t_owner}")
+            reassigned += 1
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.log_failed("view_owner", src_id, str(exc))
+            failed += 1
+        except Exception as exc:
+            logger.log_failed(
+                "view_owner", src_id,
+                f"Unexpected error: {type(exc).__name__}: {exc}",
+            )
+            failed += 1
+
+    logger.success(
+        f"View ownership: {reassigned} reassigned, {failed} failed, "
+        f"{skipped} skipped."
+    )
+
+
+def _reassign_article_authors(
+    target: ZendeskClient, id_map: Dict, source_articles: List[Dict],
+) -> None:
+    """
+    Restore Help Center article authorship: for each source article that had
+    an author_id, if both the article and author migrated, PUT the target
+    article's author_id. Articles whose author didn't migrate keep the
+    fallback author (the admin used at create time), logged as MANUAL.
+    """
+    if not source_articles:
+        return
+    article_map = id_map.get("hc_articles")
+    user_map = id_map.get("users")
+    if not isinstance(article_map, dict) or not isinstance(user_map, dict):
+        return
+
+    relevant = [a for a in source_articles
+                if isinstance(a, dict) and a.get("author_id") is not None]
+    if not relevant:
+        return
+
+    logger.section("Phase 5e — Article Authorship Reassignment")
+    reassigned = skipped = failed = 0
+    for a in relevant:
+        src_id = a.get("id")
+        t_article = article_map.get(str(src_id))
+        if not t_article:
+            continue  # article wasn't migrated
+        t_author = user_map.get(str(a.get("author_id")))
+        if not t_author:
+            logger.log_manual(
+                "hc_articles",
+                f"Article '{a.get('title', src_id)}' was authored by source "
+                f"user {a.get('author_id')} which was not migrated — kept the "
+                "fallback author. Reassign manually if required.",
+            )
+            skipped += 1
+            continue
+        try:
+            resp = target.put(
+                f"help_center/articles/{t_article}",
+                {"article": {"author_id": int(t_author) if str(t_author).isdigit() else t_author}},
+            )
+            if isinstance(resp, dict) and resp.get("dry_run"):
+                skipped += 1
+                continue
+            logger.log_created("article_author", src_id, t_article,
+                               f"author→{t_author}")
+            reassigned += 1
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.log_failed("article_author", src_id, str(exc))
+            failed += 1
+        except Exception as exc:
+            logger.log_failed(
+                "article_author", src_id,
+                f"Unexpected error: {type(exc).__name__}: {exc}",
+            )
+            failed += 1
+
+    logger.success(
+        f"Article authorship: {reassigned} reassigned, {failed} failed, "
+        f"{skipped} skipped."
+    )
 
 
 def _build_membership_pairs(

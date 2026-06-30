@@ -68,6 +68,58 @@ export interface Estimate {
   itemsPerSec: number | null;
   /** Why ETA is null (UI shows this as a soft hint). */
   reason: string | null;
+  /**
+   * Overall job completion as a fraction in [0, 1], or null when we can't
+   * estimate yet. Derived from elapsed vs. projected total time so it grows
+   * monotonically left→right as the job runs (unlike elapsed/(elapsed+eta),
+   * which stays roughly flat because the ETA scales with elapsed). The UI
+   * progress-bar fill should use THIS, not the time ratio.
+   */
+  progressFraction: number | null;
+}
+
+/**
+ * Overall completion fraction based on PHASE WEIGHTS, not the time ratio.
+ *
+ * = (sum of weights of already-finished phases)
+ *   + (within-phase fraction × current phase weight)
+ *
+ * normalized by the total weight of all phases that will run. This grows
+ * monotonically left→right as work completes, because the "finished phases"
+ * term only ever increases and the within-phase term advances toward its
+ * cap. (The old elapsed/(elapsed+eta) ratio stayed flat: a linearly
+ * projected ETA cancels the growing elapsed term.)
+ *
+ * `withinPhaseFraction` is the current phase's own progress in [0, 1]:
+ * items_done/items_total for item phases, or a time-vs-projection estimate
+ * for non-item phases. It is clamped to <1 while the phase is running.
+ */
+function fractionFromPhaseWeights(
+  phase: string,
+  withinPhaseFraction: number,
+  selectedPhases?: ReadonlySet<string>,
+): number | null {
+  const idx = PHASE_ORDER.indexOf(phase as (typeof PHASE_ORDER)[number]);
+  if (idx === -1) return null;
+
+  const runs = (ph: string) =>
+    !selectedPhases || selectedPhases.size === 0 || selectedPhases.has(ph);
+
+  let totalWeight = 0;
+  let doneWeight = 0;
+  for (let i = 0; i < PHASE_ORDER.length; i += 1) {
+    const ph = PHASE_ORDER[i];
+    if (!runs(ph)) continue;
+    const w = PHASE_WEIGHTS[ph] ?? 0;
+    totalWeight += w;
+    if (i < idx) {
+      doneWeight += w; // earlier phases are fully done
+    } else if (i === idx) {
+      doneWeight += w * Math.min(0.999, Math.max(0, withinPhaseFraction));
+    }
+  }
+  if (totalWeight <= 0) return null;
+  return Math.min(0.99, Math.max(0, doneWeight / totalWeight));
 }
 
 interface Input {
@@ -96,6 +148,9 @@ export function computeEstimate({
       etaSec: 0,
       itemsPerSec: null,
       reason: null,
+      // Completed jobs are 100% full; failed/cancelled leave the bar where
+      // it was (null → UI keeps the last fill / shows "stopped").
+      progressFraction: phase === "completed" ? 1 : null,
     };
   }
 
@@ -107,6 +162,7 @@ export function computeEstimate({
       etaSec: null,
       itemsPerSec: null,
       reason: "Waiting for the first phase to start.",
+      progressFraction: null,
     };
   }
 
@@ -119,6 +175,7 @@ export function computeEstimate({
       etaSec: null,
       itemsPerSec: null,
       reason: "Just started — settling in…",
+      progressFraction: null,
     };
   }
 
@@ -138,12 +195,21 @@ export function computeEstimate({
     const remainingWeight = sumRemainingPhaseWeights(phase, selectedPhases);
     const otherPhasesSec = projectedTotalSec * remainingWeight;
 
+    const etaSec = Math.max(phaseRemainingSec + otherPhasesSec, 0);
+    // Within-phase progress for a non-item phase (extract / format / verify):
+    // there is no item denominator and a time projection is self-referential
+    // (it cancels out, leaving a flat bar). Use a bounded asymptotic creep
+    // 1 - 1/(1 + elapsed/T): strictly increasing with elapsed, starts at 0,
+    // approaches (but never reaches) 1. T is the e-folding time in seconds.
+    const NON_ITEM_PHASE_TIME_CONSTANT_SEC = 20;
+    const withinPhase = 1 - 1 / (1 + phaseElapsedSec / NON_ITEM_PHASE_TIME_CONSTANT_SEC);
     return {
       totalElapsedSec,
       phaseElapsedSec,
-      etaSec: Math.max(phaseRemainingSec + otherPhasesSec, 0),
+      etaSec,
       itemsPerSec: null,
       reason: null,
+      progressFraction: fractionFromPhaseWeights(phase, withinPhase, selectedPhases),
     };
   }
 
@@ -159,6 +225,7 @@ export function computeEstimate({
       etaSec: null,
       itemsPerSec: null,
       reason: `Estimating… (${phaseProgressEvents.length}/${MIN_ITEMS_FOR_ETA} items processed)`,
+      progressFraction: null,
     };
   }
 
@@ -172,6 +239,7 @@ export function computeEstimate({
       etaSec: null,
       itemsPerSec: null,
       reason: "Estimating… (collecting throughput baseline)",
+      progressFraction: null,
     };
   }
   const itemsPerSec = phaseProgressEvents.length / (spanMs / 1000);
@@ -187,12 +255,18 @@ export function computeEstimate({
   const remainingWeight = sumRemainingPhaseWeights(phase, selectedPhases);
   const otherPhasesSec = phasePerWeightSec * remainingWeight;
 
+  const etaSec = Math.max(phaseRemainingSec + otherPhasesSec, 0);
+  // Within-phase progress for an item phase: items done / items expected.
+  // This is the most honest signal and is strictly monotonic as items
+  // complete.
+  const withinPhase = phaseTotal > 0 ? phaseDone / phaseTotal : 0;
   return {
     totalElapsedSec,
     phaseElapsedSec,
-    etaSec: Math.max(phaseRemainingSec + otherPhasesSec, 0),
+    etaSec,
     itemsPerSec,
     reason: null,
+    progressFraction: fractionFromPhaseWeights(phase, withinPhase, selectedPhases),
   };
 }
 
