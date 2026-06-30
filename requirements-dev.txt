@@ -1,0 +1,17 @@
+# Development & test-only dependencies.
+#
+# These are NOT needed to run the CLI or the backend service in production —
+# the runtime image installs only requirements.txt. Install these locally or
+# in CI to run the test suite:
+#
+#   python -m pip install -r requirements.txt -r requirements-dev.txt
+#   python -m pytest tests/
+
+-r requirements.txt
+
+pytest>=8.0.0
+
+# httpx2 backs Starlette's TestClient (used by tests/test_server_unit.py).
+# Starlette deprecated the legacy `httpx` integration in favour of `httpx2`,
+# so we pin httpx2 here to keep the test run warning-free.
+httpx2>=2.5.0

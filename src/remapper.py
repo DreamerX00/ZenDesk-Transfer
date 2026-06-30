@@ -117,8 +117,13 @@ def remap_payload(obj: Any, id_map: Dict[str, Dict[str, str]],
         # Detect condition/action items: {"field": "group_id", "value": "12345"}
         if _is_condition_item(obj):
             return _remap_condition_item(obj, id_map, context, _depth)
+        # Keys prefixed with "_" are internal stashes set by phase pre-process
+        # hooks (e.g. "_trigger_category_id", "_macro_actions"). They hold
+        # values that must NOT be walked/remapped here — the owning
+        # post-process hook handles them. Pass them through untouched.
         return {
-            k: _remap_value(k, v, id_map, context, _depth)
+            k: (v if isinstance(k, str) and k.startswith("_")
+                else _remap_value(k, v, id_map, context, _depth))
             for k, v in obj.items()
         }
     elif isinstance(obj, list):
@@ -341,6 +346,271 @@ def _lookup(category: str, source_id: str, id_map: Dict,
             raise RemapError(msg)
         logger.warn(msg)
     return result
+
+
+def remap_form_conditions(
+    conditions: Any,
+    id_map: Dict,
+    context: str = "",
+) -> List[Dict]:
+    """
+    Remap a ticket form's conditional-field rules (agent_conditions /
+    end_user_conditions) from source IDs to target IDs.
+
+    Each condition has the shape:
+        {
+          "parent_field_id": <source ticket field id>,
+          "value": "<option value/tag>",   # the selected drop-down value
+          "child_fields": [
+            {"id": <source ticket field id>, "is_required": bool,
+             "required_on_statuses": {...}},
+            ...
+          ]
+        }
+
+    `parent_field_id` and every `child_fields[].id` are ticket field IDs that
+    must be translated through id_map["ticket_fields"]. The `value` is an
+    option tag/text (not an ID) and is preserved verbatim.
+
+    Behavior on a mapping miss:
+      - If the parent field has no target equivalent, the whole condition is
+        dropped (it can't anchor to a non-existent field).
+      - Individual child fields with no target equivalent are dropped from the
+        child list; remaining children are kept.
+
+    Returns a new list of remapped conditions. Non-list / malformed input
+    yields an empty list.
+    """
+    if not isinstance(conditions, list):
+        return []
+
+    field_map = id_map.get("ticket_fields")
+    if not isinstance(field_map, dict):
+        logger.warn(
+            f"remap_form_conditions: 'ticket_fields' map missing/corrupt "
+            f"(context='{context}') — dropping all conditions."
+        )
+        return []
+
+    def _map_field_id(raw_id: Any) -> Optional[int]:
+        if raw_id is None:
+            return None
+        mapped = field_map.get(str(raw_id))
+        if isinstance(mapped, str) and mapped.isdigit():
+            return int(mapped)
+        if isinstance(mapped, int):
+            return mapped
+        return None
+
+    remapped: List[Dict] = []
+    for cond in conditions:
+        if not isinstance(cond, dict):
+            continue
+
+        parent_target = _map_field_id(cond.get("parent_field_id"))
+        if parent_target is None:
+            logger.warn(
+                f"Stripping form condition referencing non-migrated parent "
+                f"field {cond.get('parent_field_id')!r} (context='{context}')"
+            )
+            continue
+
+        new_children: List[Dict] = []
+        for child in cond.get("child_fields") or []:
+            if not isinstance(child, dict):
+                continue
+            child_target = _map_field_id(child.get("id"))
+            if child_target is None:
+                logger.warn(
+                    f"Dropping conditional child field {child.get('id')!r} "
+                    f"with no target equivalent (context='{context}')"
+                )
+                continue
+            new_child = dict(child)
+            new_child["id"] = child_target
+            new_children.append(new_child)
+
+        new_cond = dict(cond)
+        new_cond["parent_field_id"] = parent_target
+        new_cond["child_fields"] = new_children
+        remapped.append(new_cond)
+
+    return remapped
+
+
+# Macro action fields whose `value` is a single ID that must be remapped,
+# mapped to the id_map category that resolves them.
+_MACRO_SCALAR_ID_ACTIONS: Dict[str, str] = {
+    "group_id": "groups",
+    "brand_id": "brands",
+    "ticket_form_id": "ticket_forms",
+}
+
+
+def remap_macro_actions(actions: Any, id_map: Dict, context: str = "") -> List[Dict]:
+    """
+    Remap the `actions` array of a macro from source IDs to target IDs.
+
+    Macro actions are `{"field": <name>, "value": <value>}` items. Most fields
+    (set_tags, comment_value, subject, status, priority, ...) carry no IDs and
+    pass through untouched. The ID-bearing fields handled here:
+
+      - group_id / brand_id / ticket_form_id:
+            `value` is a single source ID → remapped via id_map.
+      - assignee_id:
+            Zendesk stores this as the composite string "<group_id>/<user_id>"
+            (either side may be empty, e.g. "123/" or "/456"). Each present
+            half is remapped independently through groups / users.
+      - custom_fields_<id> (the field name embeds a ticket field ID):
+            the embedded ID is remapped via ticket_fields; the value (an option
+            tag/text) is preserved.
+
+    Drop semantics (mirrors remap_form_conditions / _remap_condition_item):
+      - An action whose required ID can't be resolved is dropped, so the macro
+        never references a non-existent resource on the target.
+      - For the composite assignee_id, if neither half resolves the action is
+        dropped; if one half resolves it is kept with the unresolved half blank.
+
+    Returns a new list of remapped actions. Non-list input yields [].
+    """
+    if not isinstance(actions, list):
+        return []
+
+    out: List[Dict] = []
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        field = action.get("field")
+        if not isinstance(field, str):
+            out.append(action)
+            continue
+
+        # --- custom_fields_<id>: remap the embedded ticket field ID --- #
+        m = CUSTOM_FIELD_PATTERN.match(field)
+        if m:
+            mapped_id = _lookup(
+                "ticket_fields", m.group(1), id_map, context,
+                "macro_custom_field_action", raise_on_miss=False,
+            )
+            if isinstance(mapped_id, str) and mapped_id.isdigit():
+                new_action = dict(action)
+                new_action["field"] = f"custom_fields_{mapped_id}"
+                out.append(new_action)
+            else:
+                logger.warn(
+                    f"Dropping macro action referencing non-migrated ticket "
+                    f"field (field='{field}', context='{context}')"
+                )
+            continue
+
+        # --- assignee_id composite "<group_id>/<user_id>" --- #
+        if field == "assignee_id":
+            remapped_val = _remap_assignee_composite(
+                action.get("value"), id_map, context
+            )
+            if remapped_val is None:
+                logger.warn(
+                    f"Dropping macro 'assignee_id' action — neither group nor "
+                    f"user half resolved (value={action.get('value')!r}, "
+                    f"context='{context}')"
+                )
+                continue
+            new_action = dict(action)
+            new_action["value"] = remapped_val
+            out.append(new_action)
+            continue
+
+        # --- scalar single-ID fields --- #
+        category = _MACRO_SCALAR_ID_ACTIONS.get(field)
+        if category is not None:
+            value = action.get("value")
+            if value in (None, "", "current_groups", "current_user"):
+                # Sentinels / blanks — leave as-is.
+                out.append(action)
+                continue
+            mapped = _lookup(category, str(value), id_map, context, field,
+                             raise_on_miss=False)
+            if mapped is None:
+                logger.warn(
+                    f"Dropping macro action referencing missing "
+                    f"{category}[{value}] (field='{field}', context='{context}')"
+                )
+                continue
+            new_action = dict(action)
+            new_action["value"] = str(mapped)
+            out.append(new_action)
+            continue
+
+        # Non-ID action — pass through unchanged.
+        out.append(action)
+
+    return out
+
+
+def _remap_assignee_composite(value: Any, id_map: Dict,
+                              context: str) -> Optional[str]:
+    """
+    Remap a macro assignee_id value of the form "<group_id>/<user_id>".
+
+    Returns the remapped "<g>/<u>" string, or None if the value is malformed
+    or no half could be resolved. Either half may be empty in the source
+    (e.g. "123/" sets only the group); empty halves stay empty.
+    """
+    if not isinstance(value, str) or "/" not in value:
+        return None
+
+    group_part, _, user_part = value.partition("/")
+    group_part = group_part.strip()
+    user_part = user_part.strip()
+
+    new_group = ""
+    new_user = ""
+    resolved_any = False
+
+    if group_part:
+        mapped = _lookup("groups", group_part, id_map, context,
+                         "assignee_id.group", raise_on_miss=False)
+        if mapped is not None:
+            new_group = str(mapped)
+            resolved_any = True
+    if user_part:
+        mapped = _lookup("users", user_part, id_map, context,
+                         "assignee_id.user", raise_on_miss=False)
+        if mapped is not None:
+            new_user = str(mapped)
+            resolved_any = True
+
+    if not resolved_any:
+        return None
+    return f"{new_group}/{new_user}"
+
+
+def sanitize_custom_field_values(values: Any) -> Optional[Dict]:
+    """
+    Sanitize a user/organization `custom_fields` (a.k.a. `user_fields` /
+    `organization_fields`) value map for safe re-send to the target.
+
+    These values are keyed by the field *key* (a stable string the field
+    definition carries across accounts), NOT by numeric field ID — so as long
+    as the field definitions migrate with the same key (Phase 1 imports them
+    with name_field="key"), the values transfer without ID remapping.
+
+    Sanitization:
+      - Returns a plain dict of {key: value} (a shallow copy).
+      - Drops entries whose value is None (Zendesk treats absent == unset; a
+        null can clobber a default or 400 on strict fields).
+      - Drops non-string keys defensively.
+      - Returns None when there is nothing to send, so callers can omit the
+        field entirely rather than posting an empty object.
+    """
+    if not isinstance(values, dict):
+        return None
+    cleaned = {
+        k: v
+        for k, v in values.items()
+        if isinstance(k, str) and v is not None
+    }
+    return cleaned or None
 
 
 def strip_source_fields(payload: Dict) -> Dict:

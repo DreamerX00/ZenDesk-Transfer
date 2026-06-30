@@ -4,7 +4,12 @@ from typing import Any, Dict, List, Optional
 
 from src.client import ZendeskClient, ZendeskAPIError, ZendeskNetworkError
 from src.importer import flush_id_map, load_id_map, _record_mapping
-from src.remapper import strip_source_fields, remap_payload, RemapError
+from src.remapper import (
+    strip_source_fields,
+    remap_payload,
+    sanitize_custom_field_values,
+    RemapError,
+)
 from src.utils import logger
 
 BATCH_SIZE = 100
@@ -250,13 +255,23 @@ def run(
             failed += 1
             continue
 
+        # Custom user-field VALUES. These are keyed by the field's stable
+        # `key` string (not numeric ID), and the field definitions were
+        # migrated in Phase 1 with name_field="key", so the keys line up on
+        # the target. Sanitize (drop nulls / bad keys) and re-attach; omit the
+        # field entirely when there's nothing to send.
+        sanitized_user_fields = sanitize_custom_field_values(
+            payload.get("user_fields")
+        )
+        payload.pop("user_fields", None)
+
         # Strip null values so Zendesk applies defaults
         for field in list(payload.keys()):
             if payload[field] is None:
                 del payload[field]
 
-        # Strip user_fields (custom user field values) — we don't remap them yet
-        payload.pop("user_fields", None)
+        if sanitized_user_fields is not None:
+            payload["user_fields"] = sanitized_user_fields
 
         # Suppress verification/welcome email
         payload["verified"] = True
@@ -410,3 +425,254 @@ def run(
         f"User migration complete: {created_count} created, "
         f"{failed} failed, {skipped} skipped."
     )
+
+    # ---- Membership links (require users to exist first) ------------- #
+    # Group memberships (agent → group) and organization memberships
+    # (user → org) are separate resources that the user payload does not
+    # carry. Without them, agents are ungrouped (breaking group-restricted
+    # views/triggers/routing) and users lose multi-org links.
+    _migrate_group_memberships(target, id_map, exports.get("group_memberships", []))
+    _migrate_org_memberships(target, id_map, exports.get("organization_memberships", []))
+
+    flush_id_map(id_map)
+
+
+def _build_membership_pairs(
+    source_items: List[Dict],
+    id_map: Dict,
+    *,
+    user_key: str,
+    ref_key: str,
+    ref_category: str,
+    resource_label: str,
+) -> List[Dict]:
+    """
+    Translate raw source membership records into target-ID payloads.
+
+    user_key / ref_key  — field names on the source record (e.g. "user_id"
+                          and "group_id").
+    ref_category        — id_map category for the non-user side ("groups" or
+                          "organizations").
+    resource_label      — for logging (e.g. "group_memberships").
+
+    Memberships whose user OR referenced side did not migrate are skipped
+    (logged), never raised. Returns a list of dicts:
+        {"user_id": <tid>, ref_key: <tid>, "default": <bool>, "_src": <id>}
+    """
+    user_map = id_map.get("users")
+    ref_map = id_map.get(ref_category)
+    pairs: List[Dict] = []
+
+    if not isinstance(user_map, dict) or not isinstance(ref_map, dict):
+        if source_items:
+            logger.warn(
+                f"{resource_label}: required id_map categories missing "
+                f"(users / {ref_category}) — skipping all "
+                f"{len(source_items)} membership(s)."
+            )
+        return pairs
+
+    def _to_int(v: Any) -> Optional[int]:
+        if isinstance(v, str) and v.isdigit():
+            return int(v)
+        if isinstance(v, int):
+            return v
+        return None
+
+    for rec in source_items:
+        if not isinstance(rec, dict):
+            continue
+        src_id = rec.get("id")
+        s_user = rec.get(user_key)
+        s_ref = rec.get(ref_key)
+        if s_user is None or s_ref is None:
+            logger.log_skipped(
+                resource_label, src_id,
+                f"Missing {user_key}/{ref_key} on source record",
+            )
+            continue
+
+        t_user = _to_int(user_map.get(str(s_user)))
+        t_ref = _to_int(ref_map.get(str(s_ref)))
+        if t_user is None or t_ref is None:
+            logger.log_skipped(
+                resource_label, src_id,
+                f"Unmapped {user_key}={s_user} or {ref_key}={s_ref} "
+                "(referenced resource not migrated)",
+            )
+            continue
+
+        pairs.append({
+            "user_id": t_user,
+            ref_key: t_ref,
+            "default": bool(rec.get("default", False)),
+            "_src": src_id,
+        })
+
+    return pairs
+
+
+def _migrate_group_memberships(
+    target: ZendeskClient, id_map: Dict, source_items: List[Dict],
+) -> None:
+    """Recreate agent→group memberships on the target."""
+    if not source_items:
+        return
+    logger.section("Phase 5b — Group Memberships")
+
+    pairs = _build_membership_pairs(
+        source_items, id_map,
+        user_key="user_id", ref_key="group_id",
+        ref_category="groups", resource_label="group_memberships",
+    )
+    if not pairs:
+        logger.info("  No mappable group memberships to create.")
+        return
+
+    # Dedup against existing target memberships to avoid 422 duplicates.
+    existing = _existing_membership_keys(
+        target, "group_memberships", "group_memberships", "group_id"
+    )
+
+    created = skipped = failed = 0
+    for p in pairs:
+        key = (p["user_id"], p["group_id"])
+        if key in existing:
+            logger.log_skipped(
+                "group_memberships", p["_src"],
+                f"Membership user={p['user_id']} group={p['group_id']} "
+                "already exists in target",
+            )
+            skipped += 1
+            continue
+        payload = {
+            "group_membership": {
+                "user_id": p["user_id"],
+                "group_id": p["group_id"],
+                "default": p["default"],
+            }
+        }
+        try:
+            resp = target.post("group_memberships", payload)
+            if isinstance(resp, dict) and resp.get("dry_run"):
+                skipped += 1
+                continue
+            existing.add(key)
+            logger.log_created(
+                "group_memberships", p["_src"],
+                (resp.get("group_membership") or {}).get("id")
+                if isinstance(resp, dict) else None,
+                f"user={p['user_id']} group={p['group_id']}",
+            )
+            created += 1
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.log_failed("group_memberships", p["_src"], str(exc))
+            failed += 1
+        except Exception as exc:
+            logger.log_failed(
+                "group_memberships", p["_src"],
+                f"Unexpected error: {type(exc).__name__}: {exc}",
+            )
+            failed += 1
+
+    logger.success(
+        f"Group memberships: {created} created, {failed} failed, "
+        f"{skipped} skipped."
+    )
+
+
+def _migrate_org_memberships(
+    target: ZendeskClient, id_map: Dict, source_items: List[Dict],
+) -> None:
+    """Recreate user→organization memberships on the target."""
+    if not source_items:
+        return
+    logger.section("Phase 5c — Organization Memberships")
+
+    pairs = _build_membership_pairs(
+        source_items, id_map,
+        user_key="user_id", ref_key="organization_id",
+        ref_category="organizations", resource_label="organization_memberships",
+    )
+    if not pairs:
+        logger.info("  No mappable organization memberships to create.")
+        return
+
+    existing = _existing_membership_keys(
+        target, "organization_memberships", "organization_memberships",
+        "organization_id",
+    )
+
+    created = skipped = failed = 0
+    for p in pairs:
+        key = (p["user_id"], p["organization_id"])
+        if key in existing:
+            logger.log_skipped(
+                "organization_memberships", p["_src"],
+                f"Membership user={p['user_id']} org={p['organization_id']} "
+                "already exists in target",
+            )
+            skipped += 1
+            continue
+        payload = {
+            "organization_membership": {
+                "user_id": p["user_id"],
+                "organization_id": p["organization_id"],
+                "default": p["default"],
+            }
+        }
+        try:
+            resp = target.post("organization_memberships", payload)
+            if isinstance(resp, dict) and resp.get("dry_run"):
+                skipped += 1
+                continue
+            existing.add(key)
+            logger.log_created(
+                "organization_memberships", p["_src"],
+                (resp.get("organization_membership") or {}).get("id")
+                if isinstance(resp, dict) else None,
+                f"user={p['user_id']} org={p['organization_id']}",
+            )
+            created += 1
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.log_failed("organization_memberships", p["_src"], str(exc))
+            failed += 1
+        except Exception as exc:
+            logger.log_failed(
+                "organization_memberships", p["_src"],
+                f"Unexpected error: {type(exc).__name__}: {exc}",
+            )
+            failed += 1
+
+    logger.success(
+        f"Organization memberships: {created} created, {failed} failed, "
+        f"{skipped} skipped."
+    )
+
+
+def _existing_membership_keys(
+    target: ZendeskClient, list_path: str, list_rkey: str, ref_key: str,
+) -> set:
+    """
+    Build a set of (user_id, ref_id) tuples for memberships that already
+    exist on the target, so re-runs are idempotent. Failure to list is
+    non-fatal — we return an empty set and rely on the API's own duplicate
+    rejection (logged as FAILED) rather than aborting.
+    """
+    keys: set = set()
+    try:
+        existing = target.list_resource(list_path, list_rkey)
+    except (ZendeskAPIError, ZendeskNetworkError) as exc:
+        logger.warn(
+            f"Could not list existing {list_rkey}: {exc}. "
+            "Proceeding without dedup."
+        )
+        return keys
+    for m in existing:
+        if not isinstance(m, dict):
+            continue
+        u = m.get("user_id")
+        r = m.get(ref_key)
+        if u is not None and r is not None:
+            keys.add((u, r))
+    return keys

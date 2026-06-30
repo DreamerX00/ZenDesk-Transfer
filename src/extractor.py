@@ -49,6 +49,9 @@ RESOURCES = [
     ("user_segments",         "help_center/user_segments",       "hc_user_segments.json"),
     # Users
     ("users",                 "users",                           "users.json"),
+    # Membership links (created in Phase 5, after users exist)
+    ("group_memberships",        "group_memberships",            "group_memberships.json"),
+    ("organization_memberships", "organization_memberships",     "organization_memberships.json"),
     # Help Center Themes (JSON metadata only; ZIP is exported separately)
     ("themes",                "guide/theming/themes",            "hc_themes.json"),
 ]

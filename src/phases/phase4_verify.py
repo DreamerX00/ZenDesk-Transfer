@@ -38,6 +38,8 @@ VERIFY_RESOURCES = [
     ("HC Articles",          "help_center/articles",      "articles"),
     ("HC Themes",            "guide/theming/themes",      "themes"),
     ("Users",                "users",                     "users"),
+    ("Group Memberships",        "group_memberships",         "group_memberships"),
+    ("Organization Memberships", "organization_memberships",  "organization_memberships"),
 ]
 
 _SENTINEL_ERR = object()  # unique sentinel — not equal to any string

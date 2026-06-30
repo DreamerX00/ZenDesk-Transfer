@@ -19,6 +19,7 @@ from typing import Dict, List, Optional
 
 from src.client import ZendeskClient, ZendeskAPIError, ZendeskNetworkError
 from src.importer import import_resource, load_id_map
+from src.remapper import remap_form_conditions, remap_macro_actions
 from src.utils import logger
 
 
@@ -96,6 +97,8 @@ def run(source: ZendeskClient, target: ZendeskClient,
         create_path="macros", create_rkey="macro",
         create_response_rkey="macro",
         delete_path_fn=lambda tid: f"macros/{tid}",
+        pre_process_fn=_prepare_macro,
+        post_process_fn=_assign_macro_actions,
         conflict_mode="replace",
     )
 
@@ -203,7 +206,15 @@ def _assign_form_fields(target: ZendeskClient, id_map: Dict,
                         source_forms: List[Dict]) -> None:
     """
     Phase 3.1 — Now that ticket fields exist in target, push the full
-    ticket_field_ids assignment to each already-created form.
+    ticket_field_ids assignment to each already-created form, along with the
+    conditional-field rules (agent_conditions / end_user_conditions) remapped
+    from source field IDs to target field IDs.
+
+    Conditions are stripped in Phase 1 (the referenced fields don't exist on
+    the target yet) and restored here, where both the form and all custom
+    ticket fields are present in id_map. Without this step, dynamic forms
+    (fields that show/hide or become required based on a selected option) lose
+    their behavior after migration.
 
     Bug fixes:
       - Guards form.get("id") is not None before str() conversion.
@@ -264,11 +275,28 @@ def _assign_form_fields(target: ZendeskClient, id_map: Dict,
                     f"{tfid!r} for source field {sfid}"
                 )
 
-        payload = {
-            "ticket_form": {
-                "ticket_field_ids": target_field_ids,
-            }
+        # Restore conditional-field rules (dynamic forms). Field IDs embedded
+        # in the conditions are remapped to the target; conditions anchored to
+        # fields that weren't migrated are dropped by the remapper.
+        form_ctx = f"ticket_forms:{form.get('name', source_form_id)}"
+        agent_conditions = remap_form_conditions(
+            form.get("agent_conditions"), id_map, context=form_ctx
+        )
+        end_user_conditions = remap_form_conditions(
+            form.get("end_user_conditions"), id_map, context=form_ctx
+        )
+
+        ticket_form_payload = {
+            "ticket_field_ids": target_field_ids,
         }
+        # Only include condition keys when present, so forms without dynamic
+        # rules aren't sent empty arrays unnecessarily.
+        if agent_conditions:
+            ticket_form_payload["agent_conditions"] = agent_conditions
+        if end_user_conditions:
+            ticket_form_payload["end_user_conditions"] = end_user_conditions
+
+        payload = {"ticket_form": ticket_form_payload}
         try:
             resp = target.put(f"ticket_forms/{target_form_id}", payload)
             # Bug fix: honour dry_run — put() returns {"dry_run": True} in dry mode
@@ -360,6 +388,43 @@ def _assign_trigger_category(payload: Dict, id_map: Dict) -> Dict:
     if "_trigger_category_id" in payload:
         tid = payload.pop("_trigger_category_id")
         payload["category_id"] = int(tid) if str(tid).isdigit() else tid
+    return payload
+
+
+def _prepare_macro(item: Optional[Dict], id_map: Dict) -> Optional[Dict]:
+    """
+    Pre-process a macro before the generic importer.
+
+    Macro `actions` can contain ID-bearing fields (group_id, brand_id,
+    ticket_form_id, the composite assignee_id "<group>/<user>", and
+    custom_fields_<id>). The generic remap_payload would walk these as
+    condition/action items and, crucially, MIS-handle the composite assignee
+    format and re-process already-mapped values.
+
+    To get exactly-once, correct remapping we stash the raw actions under
+    `_macro_actions` and pop `actions`, so remap_payload never touches them.
+    `_assign_macro_actions` (post_process) does the remap after remap_payload
+    has run on the rest of the payload, then restores `actions`.
+    """
+    if item is None:
+        return None
+    item = dict(item)
+    if "actions" in item:
+        item["_macro_actions"] = item.pop("actions")
+    return item
+
+
+def _assign_macro_actions(payload: Dict, id_map: Dict) -> Dict:
+    """
+    Post-process: remap the stashed macro actions and restore them as
+    `actions`. Runs after remap_payload so target IDs aren't re-looked-up.
+    """
+    if "_macro_actions" in payload:
+        raw_actions = payload.pop("_macro_actions")
+        payload["actions"] = remap_macro_actions(
+            raw_actions, id_map,
+            context=f"macros:{payload.get('title', '<unnamed>')}",
+        )
     return payload
 
 

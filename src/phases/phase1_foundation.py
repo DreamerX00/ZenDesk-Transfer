@@ -15,7 +15,12 @@ from typing import Dict, List, Optional
 
 from src.client import ZendeskClient, ZendeskAPIError, ZendeskNetworkError
 from src.importer import import_resource, load_id_map, _record_mapping
-from src.remapper import strip_source_fields, remap_payload, RemapError
+from src.remapper import (
+    strip_source_fields,
+    remap_payload,
+    sanitize_custom_field_values,
+    RemapError,
+)
 from src.utils import logger
 
 
@@ -244,14 +249,20 @@ def _import_organizations_batched(
 
         try:
             payload = strip_source_fields(item)
-            # Strip organization custom field values — these reference
-            # source-specific organization field definitions by key/ID.
-            # Leaving them in would create field values on the target
-            # that reference non-existent (or differently-keyed) fields.
+            # Organization custom-field VALUES are keyed by the field's stable
+            # `key` string, and the org field definitions were migrated in
+            # Phase 1 (section 2.5) with name_field="key", so the keys line up
+            # on the target. Sanitize (drop nulls / bad keys) and retain them;
+            # omit entirely when empty.
+            sanitized_org_fields = sanitize_custom_field_values(
+                payload.get("organization_fields")
+            )
             payload.pop("organization_fields", None)
             payload = remap_payload(
                 payload, id_map, context=f"organizations:{name}"
             )
+            if sanitized_org_fields is not None:
+                payload["organization_fields"] = sanitized_org_fields
         except RemapError as exc:
             logger.log_failed("organizations", source_id, str(exc), name)
             continue

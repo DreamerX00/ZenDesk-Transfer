@@ -56,3 +56,24 @@ HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 CMD \
     ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=2)"]
 
 CMD ["python", "-m", "uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8080"]
+
+# ---- Stage 3: test image (optional, used by CI) ------------------- #
+# Built explicitly with `--target test` (e.g.
+# `docker build --target test -f docker/Dockerfile.backend .`); never part of
+# the runtime image, so production stays lean. Adds dev/test-only deps
+# (pytest, httpx2) plus the test suite, then runs it.
+FROM runtime AS test
+
+# Switch to root only to install dev deps, then drop back to the app user.
+# requirements.txt is copied too because requirements-dev.txt includes it via
+# `-r requirements.txt` (already satisfied by the runtime stage, so this is a
+# fast no-op, but the file must be resolvable next to requirements-dev.txt).
+USER root
+COPY requirements.txt /tmp/requirements.txt
+COPY requirements-dev.txt /tmp/requirements-dev.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-dev.txt
+COPY tests/ /app/tests/
+RUN chown -R app:app /app/tests
+USER app
+
+CMD ["python", "-m", "pytest", "tests/", "-q"]
