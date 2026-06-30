@@ -80,9 +80,17 @@ def run(source: ZendeskClient, target: ZendeskClient,
     # Bug fix: use Optional[Dict] instead of Dict | None (Python 3.10+ only)
     def _skip_system_ticket_field(item: Dict,
                                    _id_map: Dict) -> Optional[Dict]:
-        """Skip built-in system fields — they already exist in every account."""
+        """Skip built-in system fields — they already exist in every account.
+
+        Field `type` values are the ones the Zendesk API actually returns: the
+        "Type" field is ``tickettype`` (not ``type``) and the "Ticket status"
+        field is ``custom_status``. Both are system fields that cannot be created
+        via POST /ticket_fields, so they must be skipped here — otherwise the
+        importer tries to create them and logs a spurious failure.
+        """
         SYSTEM_TYPES = {
-            "subject", "description", "status", "priority", "type",
+            "subject", "description", "status", "custom_status",
+            "priority", "tickettype", "type",
             "assignee", "group", "requester", "organization", "tags",
             "ticket_form_id", "brand_id", "due_at",
         }
@@ -98,6 +106,10 @@ def run(source: ZendeskClient, target: ZendeskClient,
         create_path="ticket_fields", create_rkey="ticket_field",
         create_response_rkey="ticket_field",
         delete_path_fn=lambda tid: f"ticket_fields/{tid}",
+        # Ticket fields are identified by `title`, not `name` — without this the
+        # collision check never matches, so re-runs duplicate every custom field
+        # (and the form-field map drifts to the newest duplicate).
+        name_field="title",
         pre_process_fn=_skip_system_ticket_field,
         skip_system=False,  # handled by pre_process_fn above
         conflict_mode="skip",

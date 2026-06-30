@@ -23,6 +23,7 @@ from src.remapper import (
     remap_form_conditions,
     remap_macro_actions,
     find_subdomain_references,
+    build_system_field_map,
 )
 from src.utils import logger
 
@@ -33,7 +34,11 @@ def run(source: ZendeskClient, target: ZendeskClient,
 
     # ---- 3.1  Ticket Form → Field Assignments ------------------------ #
     logger.section("3.1  Ticket Form Field Assignments")
-    _assign_form_fields(target, id_map, exports.get("ticket_forms", []))
+    _assign_form_fields(
+        target, id_map,
+        exports.get("ticket_forms", []),
+        exports.get("ticket_fields", []),
+    )
 
     # ---- 3.2  Views -------------------------------------------------- #
     logger.section("3.2  Views")
@@ -257,7 +262,8 @@ def _scan_subdomain_references(
 # ------------------------------------------------------------------ #
 
 def _assign_form_fields(target: ZendeskClient, id_map: Dict,
-                        source_forms: List[Dict]) -> None:
+                        source_forms: List[Dict],
+                        source_fields: Optional[List[Dict]] = None) -> None:
     """
     Phase 3.1 — Now that ticket fields exist in target, push the full
     ticket_field_ids assignment to each already-created form, along with the
@@ -265,10 +271,21 @@ def _assign_form_fields(target: ZendeskClient, id_map: Dict,
     from source field IDs to target field IDs.
 
     Conditions are stripped in Phase 1 (the referenced fields don't exist on
-    the target yet) and restored here, where both the form and all custom
-    ticket fields are present in id_map. Without this step, dynamic forms
-    (fields that show/hide or become required based on a selected option) lose
-    their behavior after migration.
+    the target yet) and restored here, where both the form and the ticket
+    fields are resolvable. Without this step, dynamic forms (fields that
+    show/hide or become required based on a selected option) lose their
+    behavior after migration.
+
+    Field-ID resolution uses BOTH:
+      - id_map["ticket_fields"] — custom fields created/reconciled in Phase 1.
+      - a system-field map matched by `type` — built here from the source field
+        export and the target's live field list. System fields (Type, Priority,
+        Status, ...) are never created, so they aren't in id_map; conditions
+        anchored on them (or using them as children) would otherwise be dropped.
+
+    Both the form's `ticket_field_ids` order and the conditional rules are
+    resolved through this combined map, so system fields keep their place on
+    the form and system-field-driven dependencies survive.
 
     Bug fixes:
       - Guards form.get("id") is not None before str() conversion.
@@ -285,6 +302,36 @@ def _assign_form_fields(target: ZendeskClient, id_map: Dict,
     if not isinstance(field_map, dict):
         logger.warn("_assign_form_fields: ticket_fields map is missing or corrupt.")
         return
+
+    # Build a combined custom + system field map. System fields are matched by
+    # `type` against the target's live field list (one of each per account).
+    system_field_map: Dict[str, str] = {}
+    if source_fields:
+        try:
+            target_fields = target.list_resource("ticket_fields", "ticket_fields")
+            system_field_map = build_system_field_map(source_fields, target_fields)
+            if system_field_map:
+                logger.info(
+                    f"  Mapped {len(system_field_map)} system ticket field(s) "
+                    "by type for form layout/conditions."
+                )
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.warn(
+                "_assign_form_fields: could not list target ticket fields to "
+                f"map system fields ({exc}). Conditions or field order that "
+                "reference system fields (Type/Priority/...) may be lost."
+            )
+
+    # full_field_map resolves any source ticket field id (custom or system) to
+    # its target id. Custom mappings take precedence over system on the (never
+    # expected) chance of an id collision across the two maps.
+    full_field_map: Dict[str, str] = dict(system_field_map)
+    full_field_map.update({str(k): v for k, v in field_map.items()})
+
+    # remap_form_conditions resolves field ids via id_map["ticket_fields"], so
+    # hand it an id_map view whose ticket_fields is the combined map.
+    cond_id_map: Dict = dict(id_map)
+    cond_id_map["ticket_fields"] = full_field_map
 
     for form in source_forms:
         if not isinstance(form, dict):
@@ -317,11 +364,13 @@ def _assign_form_fields(target: ZendeskClient, id_map: Dict,
         for sfid in source_field_ids:
             if sfid is None:
                 continue
-            tfid = field_map.get(str(sfid))
+            tfid = full_field_map.get(str(sfid))
             if not tfid:
                 continue
             # Bug fix: guard against non-digit strings (corrupt map values)
-            if isinstance(tfid, str) and tfid.isdigit():
+            if isinstance(tfid, int):
+                target_field_ids.append(tfid)
+            elif isinstance(tfid, str) and tfid.isdigit():
                 target_field_ids.append(int(tfid))
             else:
                 logger.warn(
@@ -334,10 +383,10 @@ def _assign_form_fields(target: ZendeskClient, id_map: Dict,
         # fields that weren't migrated are dropped by the remapper.
         form_ctx = f"ticket_forms:{form.get('name', source_form_id)}"
         agent_conditions = remap_form_conditions(
-            form.get("agent_conditions"), id_map, context=form_ctx
+            form.get("agent_conditions"), cond_id_map, context=form_ctx
         )
         end_user_conditions = remap_form_conditions(
-            form.get("end_user_conditions"), id_map, context=form_ctx
+            form.get("end_user_conditions"), cond_id_map, context=form_ctx
         )
 
         ticket_form_payload = {

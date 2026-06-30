@@ -15,6 +15,7 @@ x-app-image: &app-image
   build:
     context: ..
     dockerfile: docker/Dockerfile.backend
+    target: runtime
 
 x-app-common: &app-common
   <<: *app-image

@@ -344,10 +344,25 @@ def import_resource(
                     continue
 
             if conflict_mode == "skip":
-                logger.log_skipped(
-                    resource_key, source_id,
-                    f"Target already has a {resource_key} named '{item_name}'"
-                )
+                # Reconcile the existing target resource into the id_map so
+                # dependent phases can resolve references to it on re-runs or
+                # against a pre-populated target. Without this, a skipped
+                # resource is invisible to the remapper: ticket-form conditions,
+                # triggers that embed custom_fields_<id>, and any rule pointing
+                # at it are then silently dropped. (Mirrors the reconciliation
+                # the batched organization importer already performs.)
+                if conflict_id is not None and source_id is not None:
+                    _record_mapping(id_map, resource_key, source_id, conflict_id)
+                    logger.log_skipped(
+                        resource_key, source_id,
+                        f"Target already has a {resource_key} named "
+                        f"'{item_name}' — mapped to existing id={conflict_id}"
+                    )
+                else:
+                    logger.log_skipped(
+                        resource_key, source_id,
+                        f"Target already has a {resource_key} named '{item_name}'"
+                    )
                 continue
 
             if conflict_mode == "update" and update_path_fn:

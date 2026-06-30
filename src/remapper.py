@@ -438,6 +438,68 @@ def remap_form_conditions(
     return remapped
 
 
+# ------------------------------------------------------------------ #
+#  System ticket field mapping                                        #
+# ------------------------------------------------------------------ #
+#
+# Phase 1 never *creates* system ticket fields (Subject, Status, Priority,
+# Type, Group, Assignee, Ticket status, ...) — every Zendesk account already
+# has exactly one of each. But they carry account-specific IDs, so a form's
+# `ticket_field_ids` and its conditional rules can reference a source system
+# field ID that has a different ID on the target.
+#
+# Because there is exactly one field of each system `type` per account, they
+# can be matched across accounts by `type`. This is what lets a condition
+# anchored on the system "Type"/"Priority" field — or one that makes a system
+# field a conditional child — survive migration instead of being dropped.
+#
+# `type` values are exactly what the Zendesk API returns: the "Type" field is
+# `tickettype` and the "Ticket status" field is `custom_status`.
+SYSTEM_TICKET_FIELD_TYPES = frozenset({
+    "subject", "description", "status", "custom_status",
+    "tickettype", "type", "priority", "group", "assignee",
+    "requester", "organization", "tags", "ticket_form_id",
+    "brand_id", "due_at",
+})
+
+
+def build_system_field_map(
+    source_fields: Any, target_fields: Any,
+) -> Dict[str, str]:
+    """
+    Build a ``{source_id: target_id}`` map for SYSTEM ticket fields by matching
+    on their ``type``.
+
+    Inputs are the raw ``ticket_fields`` lists from each account (as returned
+    by ``GET /api/v2/ticket_fields``). Custom fields are ignored here — those
+    are mapped by Phase 1 into ``id_map["ticket_fields"]``. Returns string keys
+    and values to match the id_map convention; malformed entries are skipped.
+    """
+    target_by_type: Dict[str, Any] = {}
+    if isinstance(target_fields, list):
+        for f in target_fields:
+            if not isinstance(f, dict):
+                continue
+            ftype = f.get("type")
+            fid = f.get("id")
+            if ftype in SYSTEM_TICKET_FIELD_TYPES and fid is not None:
+                # Exactly one system field per type — first one wins.
+                target_by_type.setdefault(ftype, fid)
+
+    mapping: Dict[str, str] = {}
+    if isinstance(source_fields, list):
+        for f in source_fields:
+            if not isinstance(f, dict):
+                continue
+            ftype = f.get("type")
+            sid = f.get("id")
+            if ftype in SYSTEM_TICKET_FIELD_TYPES and sid is not None:
+                tid = target_by_type.get(ftype)
+                if tid is not None:
+                    mapping[str(sid)] = str(tid)
+    return mapping
+
+
 # Macro action fields whose `value` is a single ID that must be remapped,
 # mapped to the id_map category that resolves them.
 _MACRO_SCALAR_ID_ACTIONS: Dict[str, str] = {
