@@ -12,7 +12,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from src.client import ZendeskClient, ZendeskAPIError, ZendeskNetworkError
 from src.utils import logger
@@ -74,14 +74,35 @@ PLAN_GATED = {
 }
 
 
-def extract_all(client: ZendeskClient) -> Dict[str, List[Dict]]:
+def extract_all(client: ZendeskClient,
+                phases: Optional[set] = None) -> Dict[str, List[Dict]]:
     """
     Fetch all resources from source and write them to exports/.
     Returns a dict keyed by resource_key for downstream use.
     Individual resource failures are logged and do NOT abort the entire run.
+
+    `phases` — the set of phase numbers the caller intends to run (e.g.
+    {1, 2, 3}).  When supplied, expensive per-item sub-exports that are only
+    needed by a specific phase are skipped if that phase is not in the set:
+
+      - user identities   → only needed by Phase 5
+      - article translations → only needed by Phase 3
+      - dynamic content variants → only needed by Phase 2
+      - routing attribute values → only needed by Phase 2
+      - live theme ZIP    → only needed by Phase 3
+
+    The flat RESOURCES list is always fetched in full because later phases
+    depend on earlier ones' id_maps (e.g. Phase 2 needs ticket_fields from
+    Phase 1).  Only the expensive *nested* sub-exports are gated.
     """
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     result: Dict[str, List[Dict]] = {}
+
+    # Determine which phases are wanted. None means "all".
+    want_all = phases is None
+    want_p2  = want_all or 2 in phases
+    want_p3  = want_all or 3 in phases
+    want_p5  = want_all or 5 in phases
 
     logger.section("Extracting source account resources")
 
@@ -113,23 +134,34 @@ def extract_all(client: ZendeskClient) -> Dict[str, List[Dict]]:
             result[resource_key] = []
 
     # Export routing attribute values (skills) — nested under each attribute.
-    # Only attempted when routing_attributes were successfully extracted.
-    _export_routing_attribute_values(client, result)
+    # Only needed by Phase 2. Skip if Phase 2 is not selected.
+    if want_p2:
+        _export_routing_attribute_values(client, result)
 
     # Export article translations — nested under each article.
-    # Only attempted when articles were successfully extracted.
-    _export_article_translations(client, result)
+    # Only needed by Phase 3. Skip if Phase 3 is not selected.
+    if want_p3:
+        _export_article_translations(client, result)
 
     # Export user identities (secondary emails, social logins) — nested per user.
-    # Only attempted when users were successfully extracted.
-    _export_user_identities(client, result)
+    # Only needed by Phase 5. With 5000+ users this is the single most
+    # expensive sub-export (~5000 API calls). Skip entirely when Phase 5
+    # is not selected — this is the primary cause of the "stuck on extract"
+    # symptom when users phase is not opted in.
+    if want_p5:
+        _export_user_identities(client, result)
+    else:
+        logger.info("  Skipping user_identities export (Phase 5 not selected)")
 
     # Export dynamic content locale variants — nested under each item.
-    # Only attempted when dynamic_content_items were successfully extracted.
-    _export_dynamic_content_variants(client, result)
+    # Only needed by Phase 2. Skip if Phase 2 is not selected.
+    if want_p2:
+        _export_dynamic_content_variants(client, result)
 
-    # Export the live help center theme as a ZIP file
-    _export_live_theme(client, result)
+    # Export the live help center theme as a ZIP file.
+    # Only needed by Phase 3. Skip if Phase 3 is not selected.
+    if want_p3:
+        _export_live_theme(client, result)
 
     return result
 
@@ -167,44 +199,49 @@ def _export_article_translations(
     """
     Export all non-default-locale translations for each Help Center article.
 
-    The default locale translation is the article body itself (already in the
-    article record). Additional translations live at:
-        GET /help_center/articles/{id}/translations
-
-    Each translation record is augmented with `article_id` so the Phase 3
-    importer can POST it to the correct target article.
+    Parallelised with a thread pool — each article needs one GET, and with
+    93 articles the sequential version took ~2 min at 200 RPM. The rate
+    limiter in ZendeskClient is thread-safe so concurrent workers are fine.
     """
     articles = result.get("articles", [])
     if not articles:
         return
 
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
     all_translations: List[Dict] = []
-    for article in articles:
+    lock = threading.Lock()
+
+    def _fetch_one(article: Dict) -> None:
         article_id = article.get("id")
         if article_id is None:
-            continue
+            return
         default_locale = article.get("locale", "")
         try:
             translations = list(client.get_all(
                 f"help_center/articles/{article_id}/translations",
                 "translations",
             ))
+            batch = []
             for t in translations:
                 if not isinstance(t, dict):
                     continue
-                # Skip the default locale — it's already in the article body
                 if t.get("locale", "") == default_locale:
                     continue
                 t["article_id"] = article_id
-                all_translations.append(t)
+                batch.append(t)
+            if batch:
+                with lock:
+                    all_translations.extend(batch)
         except (ZendeskAPIError, ZendeskNetworkError) as exc:
-            logger.warn(
-                f"Could not fetch translations for article {article_id}: {exc}"
-            )
+            logger.warn(f"Could not fetch translations for article {article_id}: {exc}")
         except Exception as exc:
-            logger.warn(
-                f"Unexpected error fetching translations for article {article_id}: {exc}"
-            )
+            logger.warn(f"Unexpected error fetching translations for article {article_id}: {exc}")
+
+    workers = min(8, len(articles))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(_fetch_one, articles))
 
     result["article_translations"] = all_translations
     if all_translations:
@@ -218,45 +255,41 @@ def _export_dynamic_content_variants(
 ) -> None:
     """
     Export all non-default locale variants for each dynamic content item.
-
-    Zendesk stores locale variants at /dynamic_content/items/{id}/variants.
-    The default locale variant is already embedded in the item record itself.
-    We export only non-default variants so Phase 2 can recreate them on the
-    target item after the item is created.
-
-    Each variant record is augmented with `item_id` (source) so the importer
-    can POST it under the correct target item.
+    Parallelised — each item needs one GET.
     """
     items = result.get("dynamic_content_items", [])
     if not items:
         return
 
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
     all_variants: List[Dict] = []
-    for item in items:
+    lock = threading.Lock()
+
+    def _fetch_one(item: Dict) -> None:
         item_id = item.get("id")
         if item_id is None:
-            continue
+            return
         default_locale_id = item.get("default_locale_id")
         try:
             variants = list(client.get_all(
                 f"dynamic_content/items/{item_id}/variants", "variants"
             ))
-            for v in variants:
-                if not isinstance(v, dict):
-                    continue
-                # Skip the default locale — it's already in the item record
-                if v.get("locale_id") == default_locale_id:
-                    continue
+            batch = [v for v in variants
+                     if isinstance(v, dict) and v.get("locale_id") != default_locale_id]
+            for v in batch:
                 v["item_id"] = item_id
-                all_variants.append(v)
+            with lock:
+                all_variants.extend(batch)
         except (ZendeskAPIError, ZendeskNetworkError) as exc:
-            logger.warn(
-                f"Could not fetch variants for dynamic content item {item_id}: {exc}"
-            )
+            logger.warn(f"Could not fetch variants for dynamic content item {item_id}: {exc}")
         except Exception as exc:
-            logger.warn(
-                f"Unexpected error fetching variants for DC item {item_id}: {exc}"
-            )
+            logger.warn(f"Unexpected error fetching variants for DC item {item_id}: {exc}")
+
+    workers = min(8, len(items))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(_fetch_one, items))
 
     result["dynamic_content_variants"] = all_variants
     if all_variants:
@@ -269,65 +302,73 @@ def _export_user_identities(
     result: Dict[str, List[Dict]],
 ) -> None:
     """
-    Export all non-primary user identities (secondary emails, Twitter/X,
-    phone, Google, etc.) for each user.
+    Export all non-primary user identities (secondary emails, phone, etc.)
+    for each user.
 
-    Zendesk stores identities at /users/{id}/identities. The primary identity
-    (the login email) is already on the user record itself. We export only
-    non-primary identities so Phase 5 can recreate them on the target user
-    after the user is created.
+    PERFORMANCE: with 5863 users this function makes 5863 API calls.
+    Sequential execution at 200 RPM takes ~29 minutes. We parallelise with
+    a thread pool — the ZendeskClient rate limiter is thread-safe and gates
+    all workers to the account's RPM ceiling, so we get maximum throughput
+    without exceeding the plan limit.
 
-    Each identity record is augmented with `user_id` (source) so the Phase 5
-    importer can POST it under the correct target user.
-
-    We skip identities of type 'email' that are marked primary=True (already
-    on the user record) and identities of type 'twitter'/'facebook' that
-    require OAuth re-authorization by the user — those are flagged as MANUAL.
+    Worker count is capped at 16 — enough to saturate the rate limiter's
+    token bucket without spinning up thousands of threads for large accounts.
     """
     users = result.get("users", [])
     if not users:
         return
 
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
     OAUTH_TYPES = frozenset({"twitter", "facebook", "google"})
     all_identities: List[Dict] = []
-    manual_count = 0
+    manual_count_ref = [0]  # mutable int via list for closure
+    lock = threading.Lock()
 
-    for user in users:
+    # Only fetch for real users (skip system user id=1)
+    target_users = [u for u in users if isinstance(u, dict)
+                    and u.get("id") is not None and u.get("id") != 1]
+
+    def _fetch_one(user: Dict) -> None:
         user_id = user.get("id")
-        if user_id is None or user_id == 1:
-            continue
         try:
             identities = list(client.get_all(
                 f"users/{user_id}/identities", "identities"
             ))
+            batch = []
+            manual = 0
             for ident in identities:
                 if not isinstance(ident, dict):
                     continue
-                # Skip the primary email — it's already on the user record
                 if ident.get("primary") and ident.get("type") == "email":
-                    continue
-                # OAuth-backed identities can't be migrated — flag as MANUAL
+                    continue  # already on the user record
                 if ident.get("type") in OAUTH_TYPES:
-                    manual_count += 1
+                    manual += 1
                     continue
                 ident["user_id"] = user_id
-                all_identities.append(ident)
+                batch.append(ident)
+            with lock:
+                all_identities.extend(batch)
+                manual_count_ref[0] += manual
         except (ZendeskAPIError, ZendeskNetworkError) as exc:
-            logger.warn(
-                f"Could not fetch identities for user {user_id}: {exc}"
-            )
+            logger.warn(f"Could not fetch identities for user {user_id}: {exc}")
         except Exception as exc:
-            logger.warn(
-                f"Unexpected error fetching identities for user {user_id}: {exc}"
-            )
+            logger.warn(f"Unexpected error fetching identities for user {user_id}: {exc}")
+
+    workers = min(16, len(target_users))
+    logger.info(f"  Fetching identities for {len(target_users)} users "
+                f"({workers} parallel workers)...")
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(_fetch_one, target_users))
 
     result["user_identities"] = all_identities
     if all_identities:
         _save("user_identities.json", all_identities)
         logger.info(f"  Exported {len(all_identities):>4}  user_identities")
-    if manual_count:
+    if manual_count_ref[0]:
         logger.warn(
-            f"  {manual_count} OAuth-backed user identities (Twitter/Facebook/Google) "
+            f"  {manual_count_ref[0]} OAuth-backed user identities (Twitter/Facebook/Google) "
             "cannot be migrated — users must re-link them manually."
         )
 

@@ -399,7 +399,10 @@ def cmd_run(args):
 
     logger.section("Extracting from source account")
     try:
-        exports = extract_all(source)
+        # Build the phase set so extract_all can skip expensive sub-exports
+        # (e.g. user identities) that aren't needed for the selected phases.
+        _phase_set = None if phase is None else {phase}
+        exports = extract_all(source, phases=_phase_set)
     except Exception as exc:
         logger.error(f"Extraction failed unexpectedly: {type(exc).__name__}: {exc}")
         sys.exit(1)
@@ -457,7 +460,7 @@ def cmd_migrate(args):
 
     logger.section("Step 1 — Extracting source account")
     try:
-        exports = extract_all(source)
+        exports = extract_all(source, phases=None)  # migrate always runs all phases
     except Exception as exc:
         logger.error(f"Extraction failed: {type(exc).__name__}: {exc}")
         sys.exit(1)

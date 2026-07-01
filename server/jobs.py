@@ -204,7 +204,7 @@ def run_full_migration(
             return summary
 
         _emit_phase_start(migration_id, "extract")
-        exports = extract_all(source)
+        exports = extract_all(source, phases=want)
         summary["phases_run"].append("extract")
         # Publish extracted resource counts for frontend estimation.
         for rkey, items in exports.items():
