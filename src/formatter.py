@@ -197,17 +197,37 @@ def _parallel_delete(
             item.get("name") or item.get("title") or f"id={item_id}"
         )
         delete_path = delete_tpl.replace("{id}", str(item_id))
-        try:
-            client.delete(delete_path)
-            logger.log_purged(label, item_id, item_name)
-        except (ZendeskAPIError, ZendeskNetworkError) as exc:
-            logger.log_failed(label, item_id, f"Delete failed: {exc}", item_name)
-        except Exception as exc:
-            logger.log_failed(
-                label, item_id,
-                f"Unexpected error during delete: {type(exc).__name__}: {exc}",
-                item_name,
-            )
+        # Retry on 409 Conflict — Zendesk HC articles/sections can be
+        # temporarily locked by another client (e.g. a concurrent index
+        # rebuild). Back off and retry up to 3 times before giving up.
+        max_attempts = 4
+        for attempt in range(1, max_attempts + 1):
+            try:
+                client.delete(delete_path)
+                logger.log_purged(label, item_id, item_name)
+                break
+            except ZendeskAPIError as exc:
+                if exc.status_code == 409 and attempt < max_attempts:
+                    import time as _time
+                    wait = 2 ** attempt  # 2s, 4s, 8s
+                    logger.warn(
+                        f"{label} id={item_id} locked (409), "
+                        f"retrying in {wait}s (attempt {attempt}/{max_attempts - 1})…"
+                    )
+                    _time.sleep(wait)
+                    continue
+                logger.log_failed(label, item_id, f"Delete failed: {exc}", item_name)
+                break
+            except ZendeskNetworkError as exc:
+                logger.log_failed(label, item_id, f"Delete failed: {exc}", item_name)
+                break
+            except Exception as exc:
+                logger.log_failed(
+                    label, item_id,
+                    f"Unexpected error during delete: {type(exc).__name__}: {exc}",
+                    item_name,
+                )
+                break
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [pool.submit(_one, it) for it in items]

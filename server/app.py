@@ -194,21 +194,13 @@ def _enqueue(job_callable, *args, **kwargs) -> str:
     don't expose the RQ id to the iframe — the iframe tracks the
     migration_id, which is independent.
 
-    Falls back to synchronous execution when ZDX_DEV_MODE is set so
-    `uvicorn` alone (without a separate `rq worker` process) still
-    runs end-to-end. Production deployments MUST run a worker.
+    ZDX_DEV_MODE=1 is used only to bypass the standalone session IP
+    check — it does NOT mean jobs should run inline. Running migration
+    jobs inline blocks uvicorn's event loop for the entire migration
+    duration (potentially hours), preventing health checks, SSE polls,
+    and all other HTTP requests from being served. Jobs always go
+    through the RQ worker queue regardless of dev_mode.
     """
-    if get_settings().dev_mode:
-        # Inline execution: blocks the HTTP request for the job's
-        # duration. Useful for local dev / smoke tests. Errors don't
-        # propagate — same contract as the worker.
-        try:
-            job_callable(*args, **kwargs)
-        except Exception:
-            import traceback
-            traceback.print_exc()
-        return "inline"
-
     import redis
     from rq import Queue
     s = get_settings()
