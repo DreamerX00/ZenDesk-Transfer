@@ -84,7 +84,23 @@ services:
 
   worker:
     <<: *app-common
-    command: ["rq", "worker", "--url", "redis://redis:6379/0", "${ZDX_QUEUE_NAME:-zd-transfer}"]
+    command:
+      - rq
+      - worker
+      - "--url"
+      - "redis://redis:6379/0"
+      # Worker heartbeat TTL — how long RQ waits before declaring the
+      # worker dead. Default is 420s (7 min). The extract phase can take
+      # several minutes on large accounts (5863 users + 93 articles with
+      # per-article translation calls), so we raise this to 10 min so
+      # the watchdog never kills an actively-running job.
+      - "--worker-ttl"
+      - "600"
+      # How often the worker sends its heartbeat to Redis and checks for
+      # job cancellation signals. Set to 5 min (300s) as requested.
+      - "--job-monitoring-interval"
+      - "300"
+      - "${ZDX_QUEUE_NAME:-zd-transfer}"
     healthcheck:
       disable: true
     depends_on:
