@@ -384,30 +384,36 @@ def run_preflight(
 # ------------------------------------------------------------------ #
 
 _ALL_RESOURCES_ORDERED = [
-    ("hc_articles",           "help_center/articles/{id}"),
-    ("hc_sections",           "help_center/sections/{id}"),
-    ("hc_categories",         "help_center/categories/{id}"),
-    ("hc_user_segments",      "help_center/user_segments/{id}"),
-    ("themes",                "guide/theming/themes/{id}"),
-    ("webhooks",              "webhooks/{id}"),
-    ("dynamic_content_items", "dynamic_content/items/{id}"),
-    ("routing_attributes",    "routing/attributes/{id}"),
-    ("schedules",             "business_hours/schedules/{id}"),
-    ("group_sla_policies",    "group_slas/policies/{id}"),
-    ("sla_policies",          "slas/policies/{id}"),
-    ("macros",                "macros/{id}"),
-    ("automations",           "automations/{id}"),
-    ("triggers",              "triggers/{id}"),
-    ("trigger_categories",    "trigger_categories/{id}"),
-    ("views",                 "views/{id}"),
-    ("organizations",         "organizations/{id}"),
-    ("ticket_forms",          "ticket_forms/{id}"),
-    ("custom_roles",          "custom_roles/{id}"),
-    ("organization_fields",   "organization_fields/{id}"),
-    ("user_fields",           "user_fields/{id}"),
-    ("ticket_fields",         "ticket_fields/{id}"),
-    ("brands",                "brands/{id}"),
-    ("groups",                "groups/{id}"),
+    ("hc_articles",              "help_center/articles/{id}"),
+    ("hc_sections",              "help_center/sections/{id}"),
+    ("hc_categories",            "help_center/categories/{id}"),
+    ("hc_user_segments",         "help_center/user_segments/{id}"),
+    ("hc_permission_groups",     "guide/permission_groups/{id}"),
+    ("themes",                   "guide/theming/themes/{id}"),
+    ("webhooks",                 "webhooks/{id}"),
+    ("dynamic_content_items",    "dynamic_content/items/{id}"),
+    ("routing_attribute_values", "routing/attributes/{id}/values/{id}"),  # handled specially below
+    ("routing_attributes",       "routing/attributes/{id}"),
+    ("schedules",                "business_hours/schedules/{id}"),
+    ("group_sla_policies",       "group_slas/policies/{id}"),
+    ("sla_policies",             "slas/policies/{id}"),
+    ("macros",                   "macros/{id}"),
+    ("automations",              "automations/{id}"),
+    ("triggers",                 "triggers/{id}"),
+    ("trigger_categories",       "trigger_categories/{id}"),
+    ("views",                    "views/{id}"),
+    ("custom_statuses",          "custom_statuses/{id}"),
+    ("organizations",            "organizations/{id}"),
+    ("ticket_forms",             "ticket_forms/{id}"),
+    ("custom_roles",             "custom_roles/{id}"),
+    ("organization_fields",      "organization_fields/{id}"),
+    ("user_fields",              "user_fields/{id}"),
+    ("ticket_fields",            "ticket_fields/{id}"),
+    ("brands",                   "brands/{id}"),
+    ("groups",                   "groups/{id}"),
+    ("group_memberships",        "group_memberships/{id}"),
+    ("organization_memberships", "organization_memberships/{id}"),
+    ("users",                    "users/{id}"),
 ]
 
 _PHASE_RESOURCE_KEYS = {
@@ -418,12 +424,18 @@ _PHASE_RESOURCE_KEYS = {
     ],
     2: [
         "webhooks", "dynamic_content_items", "routing_attributes",
+        "routing_attribute_values",
         "schedules", "group_sla_policies", "sla_policies",
         "macros", "automations", "triggers", "trigger_categories", "views",
+        "custom_statuses",
     ],
     3: [
-        "hc_articles", "hc_sections", "hc_categories", "hc_user_segments",
+        "hc_articles", "hc_sections", "hc_categories",
+        "hc_user_segments", "hc_permission_groups",
         "themes",
+    ],
+    5: [
+        "users", "group_memberships", "organization_memberships",
     ],
 }
 
@@ -432,14 +444,43 @@ def _delete_idmap_resources(
     target: ZendeskClient,
     id_map: dict,
     resource_keys: list,
-    label: str = "",
 ) -> int:
-    delete_path_map = dict(_ALL_RESOURCES_ORDERED)
+    delete_path_map = {rkey: tpl for rkey, tpl in _ALL_RESOURCES_ORDERED}
     deleted = 0
     for rkey in resource_keys:
         mappings = id_map.get(rkey)
         if not isinstance(mappings, dict) or not mappings:
             continue
+
+        # routing_attribute_values are nested under their parent attribute.
+        # The id_map stores {source_val_id: target_val_id} but the DELETE
+        # path is /routing/attributes/{attr_id}/values/{val_id}. We need
+        # the parent attribute's target ID to build the path. Resolve it
+        # by scanning id_map["routing_attributes"] for each value's parent.
+        if rkey == "routing_attribute_values":
+            attr_map = id_map.get("routing_attributes", {})
+            # Build a reverse map: target_val_id → target_attr_id by
+            # fetching each target attribute's values. This is expensive
+            # but cleanup is a rare, operator-initiated operation.
+            # Simpler approach: the source extractor augmented each value
+            # with attribute_id, but that's not stored in id_map. Instead,
+            # iterate target attributes and delete their values directly.
+            tgt_attr_ids = [v for v in attr_map.values() if v and str(v).strip() not in ("", "None")]
+            for tgt_attr_id in tgt_attr_ids:
+                for src_val_id, tgt_val_id in list(mappings.items()):
+                    if not tgt_val_id or str(tgt_val_id).strip() in ("", "None"):
+                        continue
+                    path = f"routing/attributes/{tgt_attr_id}/values/{tgt_val_id}"
+                    try:
+                        target.delete(path)
+                        deleted += 1
+                    except ZendeskAPIError as exc:
+                        if exc.status_code == 404:
+                            deleted += 1  # already gone
+                    except ZendeskNetworkError:
+                        pass
+            continue
+
         tpl = delete_path_map.get(rkey, "")
         if not tpl or "{id}" not in tpl:
             continue
@@ -501,7 +542,7 @@ def run_cleanup(
         from server.state import state_dir_for
         id_map = load_id_map()
         all_keys = [rkey for rkey, _ in _ALL_RESOURCES_ORDERED]
-        deleted = _delete_idmap_resources(target, id_map, all_keys, label="cleanup")
+        deleted = _delete_idmap_resources(target, id_map, all_keys)
         _reset_state_files(state_dir_for(migration_id))
 
         _status_update(
@@ -551,8 +592,7 @@ def run_rollback(
 
         from src.importer import load_id_map
         id_map = load_id_map()
-        deleted = _delete_idmap_resources(target, id_map, resource_keys,
-                                          label=f"phase{phase}")
+        deleted = _delete_idmap_resources(target, id_map, resource_keys)
 
         _status_update(
             migration_id, phase="completed",
@@ -597,10 +637,9 @@ def run_restore(
 
         from pathlib import Path
         from src.backup import restore as bk_restore, BACKUPS_DIR, SAFE_TIMESTAMP_RE
-        backup_dir = Path(backup_path)
-        resolved = backup_dir.resolve()
+        backup_dir = Path(backup_path).resolve()
         try:
-            resolved.relative_to(BACKUPS_DIR.resolve())
+            backup_dir.relative_to(BACKUPS_DIR.resolve())
         except ValueError:
             raise ValueError("backup path must be inside the backups directory")
         if not SAFE_TIMESTAMP_RE.match(backup_dir.name):

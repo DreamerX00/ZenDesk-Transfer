@@ -136,6 +136,14 @@ def backup(client: ZendeskClient) -> Optional[Path]:
         if resource_key == "themes":
             total += _backup_themes(client, backup_dir, items)
 
+        # For articles, also back up per-article translations
+        if resource_key == "articles":
+            total += _backup_article_translations(client, backup_dir, items)
+
+        # For dynamic content items, also back up per-item locale variants
+        if resource_key == "dynamic_content_items":
+            total += _backup_dynamic_content_variants(client, backup_dir, items)
+
     if total == 0:
         logger.success("Target account is empty — no backup needed.")
         return None
@@ -277,8 +285,36 @@ def restore(client: ZendeskClient, backup_dir: Path) -> int:
             if resource_key == "custom_roles":
                 payload = _prepare_custom_role(payload)
 
+            # HC sections must be created under their parent category:
+            # POST /help_center/categories/{category_id}/sections
+            # Using the flat /help_center/sections path returns 404.
+            # Similarly, articles must be created under their section.
+            # If the parent ID is missing from the payload (stripped or
+            # absent), skip rather than 404 on the target.
+            effective_api_path = api_path
+            if resource_key == "sections":
+                cat_id = payload.get("category_id") or item.get("category_id")
+                if not cat_id:
+                    logger.log_failed(
+                        resource_key, item_id,
+                        "No category_id — cannot determine create path for section.",
+                        item_name,
+                    )
+                    continue
+                effective_api_path = f"help_center/categories/{cat_id}/sections"
+            elif resource_key == "articles":
+                sec_id = payload.get("section_id") or item.get("section_id")
+                if not sec_id:
+                    logger.log_failed(
+                        resource_key, item_id,
+                        "No section_id — cannot determine create path for article.",
+                        item_name,
+                    )
+                    continue
+                effective_api_path = f"help_center/sections/{sec_id}/articles"
+
             try:
-                resp = client.post(api_path, {create_rkey: payload})
+                resp = client.post(effective_api_path, {create_rkey: payload})
                 new_id = resp.get(create_rkey, {}).get("id") if isinstance(resp, dict) else None
                 logger.log_created(resource_key, item_id, new_id, item_name)
                 created += 1
@@ -396,7 +432,83 @@ def _backup_themes(
     return count
 
 
-def _save_backup(path: Path, data: any) -> None:
+def _backup_article_translations(
+    client: ZendeskClient,
+    backup_dir: Path,
+    articles: List[Dict],
+) -> int:
+    """
+    Back up non-default-locale translations for each article.
+    Mirrors the extractor's _export_article_translations logic.
+    Each translation is augmented with `article_id` so restore can
+    POST it under the correct article.
+    """
+    all_translations: List[Dict] = []
+    for article in articles:
+        article_id = article.get("id")
+        if article_id is None:
+            continue
+        default_locale = article.get("locale", "")
+        try:
+            translations = list(client.get_all(
+                f"help_center/articles/{article_id}/translations",
+                "translations",
+            ))
+            for t in translations:
+                if not isinstance(t, dict):
+                    continue
+                if t.get("locale", "") == default_locale:
+                    continue  # default locale is already in the article body
+                t["article_id"] = article_id
+                all_translations.append(t)
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.warn(f"  Could not back up translations for article {article_id}: {exc}")
+        except Exception as exc:
+            logger.warn(f"  Unexpected error backing up translations for article {article_id}: {exc}")
+
+    if all_translations:
+        _save_backup(backup_dir / "article_translations.json", all_translations)
+        logger.info(f"  Backed up {len(all_translations):>4}  article_translations")
+    return len(all_translations)
+
+
+def _backup_dynamic_content_variants(
+    client: ZendeskClient,
+    backup_dir: Path,
+    items: List[Dict],
+) -> int:
+    """
+    Back up non-default locale variants for each dynamic content item.
+    Mirrors the extractor's _export_dynamic_content_variants logic.
+    Each variant is augmented with `item_id` so restore can POST it
+    under the correct item.
+    """
+    all_variants: List[Dict] = []
+    for item in items:
+        item_id = item.get("id")
+        if item_id is None:
+            continue
+        default_locale_id = item.get("default_locale_id")
+        try:
+            variants = list(client.get_all(
+                f"dynamic_content/items/{item_id}/variants", "variants"
+            ))
+            for v in variants:
+                if not isinstance(v, dict):
+                    continue
+                if v.get("locale_id") == default_locale_id:
+                    continue  # default locale is already in the item body
+                v["item_id"] = item_id
+                all_variants.append(v)
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.warn(f"  Could not back up variants for DC item {item_id}: {exc}")
+        except Exception as exc:
+            logger.warn(f"  Unexpected error backing up variants for DC item {item_id}: {exc}")
+
+    if all_variants:
+        _save_backup(backup_dir / "dynamic_content_variants.json", all_variants)
+        logger.info(f"  Backed up {len(all_variants):>4}  dynamic_content_variants")
+    return len(all_variants)
     """Atomically write a backup file (temp + rename)."""
     fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
