@@ -195,7 +195,13 @@ class ZendeskClient:
     MAX_RETRIES = 6
     BACKOFF_BASE = 2   # seconds; wait = BACKOFF_BASE ** attempt (capped at 64s)
     BACKOFF_CAP = 64   # seconds maximum back-off
-    REQUEST_TIMEOUT = 30  # seconds
+    # Tuple timeout: (connect_timeout, read_timeout).
+    # The scalar form only covers connection + first byte — it does NOT bound
+    # the total response body read. A stalled HTTPS connection in CLOSE_WAIT
+    # (server sent FIN but client hasn't finished reading) can block forever
+    # with a scalar timeout. The tuple form sets an independent deadline on
+    # each read() syscall, so a dead connection is detected within 60s.
+    REQUEST_TIMEOUT = (10, 60)  # (connect, read) seconds
 
     # Valid Zendesk subdomain: 1-63 lowercase alnum chars or hyphens,
     # must start and end with alnum (same rules as DNS label).
@@ -955,7 +961,17 @@ class ZendeskClient:
                         f"guide/theming/jobs/{job_id}",
                     )
                 download_url = self._ensure_https(download_url)
-                dl = requests.get(download_url, timeout=self.REQUEST_TIMEOUT)
+                # Theme download URLs are temporary S3 pre-signed URLs —
+                # they are NOT on the Zendesk subdomain, so we cannot run
+                # them through _validate_url (which enforces our subdomain).
+                # We do enforce HTTPS and use the authenticated session so
+                # private/unpublished themes are accessible.
+                if not download_url.startswith("https://"):
+                    raise ZendeskAPIError(
+                        0, "Theme export download URL is not HTTPS — rejected.",
+                        download_url,
+                    )
+                dl = self._session.get(download_url, timeout=self.REQUEST_TIMEOUT)
                 dl.raise_for_status()
                 return dl.content
             if status == "failed":

@@ -821,10 +821,13 @@ def _migrate_article_labels(
     if not label_names:
         return
 
+    # Zendesk HC labels API: POST /help_center/articles/{id}/labels
+    # expects {"labels": [{"name": "..."}, ...]} — NOT "article_labels".
+    # Posting the wrong key results in a 200 with no labels created.
     try:
         resp = target.post(
             f"help_center/articles/{target_article_id}/labels",
-            {"article_labels": label_names},
+            {"labels": [{"name": n} for n in label_names]},
         )
         if resp.get("dry_run"):
             return

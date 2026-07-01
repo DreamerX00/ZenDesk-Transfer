@@ -66,9 +66,14 @@ _MAX_WORKERS = 6
 # Chunk size for destroy_many — Zendesk caps at 100 per call.
 _BULK_DELETE_CHUNK = 100
 
-# System/built-in types that must never be deleted
+# System/built-in types that must never be deleted.
+# Must match SYSTEM_TICKET_FIELD_TYPES in remapper.py and backup.py —
+# "tickettype" is the API value for the "Type" field and "custom_status"
+# is the "Ticket status" field; both are built into every account and
+# cannot be deleted regardless of plan.
 SYSTEM_TYPES = frozenset({
-    "subject", "description", "status", "priority", "type",
+    "subject", "description", "status", "custom_status",
+    "priority", "tickettype", "type",
     "assignee", "group", "requester", "organization", "tags",
     "ticket_form_id", "brand_id", "due_at",
 })

@@ -495,6 +495,26 @@ def import_resource(
                         f"'{item_name}' (id={target_id}): {exc}"
                     )
 
+            # Fix: apply stashed custom_field_options via a POST-create PUT.
+            # Zendesk ignores `custom_field_options` on the initial field
+            # creation POST but accepts them on a subsequent PUT. Without this,
+            # dropdown and checkbox fields are created with no options, making
+            # them unusable on the target. The options are stashed under the
+            # private key `_custom_field_options` by the pre_process_fn.
+            deferred_options = payload.get("_custom_field_options")
+            if deferred_options and update_path_fn:
+                try:
+                    client.put(
+                        update_path_fn(target_id),
+                        {create_rkey: {"custom_field_options": deferred_options}},
+                    )
+                except Exception as exc:
+                    logger.warn(
+                        f"Failed to apply custom_field_options for {resource_key} "
+                        f"'{item_name}' (id={target_id}): {exc}. "
+                        "Dropdown/checkbox options may be missing on target."
+                    )
+
         except (ZendeskAPIError, ZendeskNetworkError) as exc:
             logger.log_failed(resource_key, source_id, str(exc), item_name)
         except Exception as exc:

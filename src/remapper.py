@@ -444,8 +444,10 @@ def remap_form_conditions(
             )
             continue
 
+        source_children = cond.get("child_fields") or []
         new_children: List[Dict] = []
-        for child in cond.get("child_fields") or []:
+        dropped_children: List[Any] = []
+        for child in source_children:
             if not isinstance(child, dict):
                 continue
             child_target = _map_field_id(child.get("id"))
@@ -454,10 +456,25 @@ def remap_form_conditions(
                     f"Dropping conditional child field {child.get('id')!r} "
                     f"with no target equivalent (context='{context}')"
                 )
+                dropped_children.append(child.get("id"))
                 continue
             new_child = dict(child)
             new_child["id"] = child_target
             new_children.append(new_child)
+
+        # Guard: if the source condition had child_fields but ALL of them
+        # failed to remap, sending child_fields=[] would tell Zendesk to
+        # show every field unconditionally — the opposite of the intended
+        # behaviour. Drop the whole condition instead and warn the operator.
+        if source_children and not new_children:
+            logger.warn(
+                f"Stripping form condition for parent field "
+                f"{cond.get('parent_field_id')!r} (value={cond.get('value')!r}) "
+                f"— all child fields {dropped_children} failed to remap "
+                f"(context='{context}'). Dynamic hide/show rule will be absent "
+                "on target; review the form manually."
+            )
+            continue
 
         new_cond = dict(cond)
         new_cond["parent_field_id"] = parent_target

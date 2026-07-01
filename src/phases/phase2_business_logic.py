@@ -519,26 +519,38 @@ def _assign_form_fields(target: ZendeskClient, id_map: Dict,
             form.get("end_user_conditions"), cond_id_map, context=form_ctx
         )
 
-        # Fix P1-O: if every source field failed to remap, target_field_ids is
-        # []. Sending ticket_field_ids=[] would wipe the form's field layout on
-        # the target. Skip the PUT entirely and log a warning so the operator
-        # knows the form layout was not updated.
-        if not target_field_ids:
+        source_agent_conds = form.get("agent_conditions")
+        source_end_user_conds = form.get("end_user_conditions")
+        has_conditions = (
+            (source_agent_conds is not None and agent_conditions)
+            or (source_end_user_conds is not None and end_user_conditions)
+        )
+
+        # Fix P1-O: if every source field failed to remap AND there are no
+        # conditions to apply, skip the PUT entirely — sending
+        # ticket_field_ids=[] would wipe the form's field layout on the target.
+        # But if conditions ARE present (e.g. a form that uses only system
+        # fields whose IDs are in the system_field_map), we must still PUT so
+        # the dynamic rules are applied even when no custom fields remapped.
+        if not target_field_ids and not has_conditions:
             logger.warn(
                 f"ticket_form_fields: skipping form '{form.get('name', source_form_id)}' "
-                f"(target_form_id={target_form_id}) — all source field IDs failed to remap. "
-                "The form's field layout on the target is unchanged."
+                f"(target_form_id={target_form_id}) — all source field IDs failed to remap "
+                "and no conditions to apply. The form's field layout on the target is unchanged."
             )
             continue
 
-        ticket_form_payload = {
-            "ticket_field_ids": target_field_ids,
-        }
-        # Only include condition keys when present, so forms without dynamic
-        # rules aren't sent empty arrays unnecessarily.
-        if agent_conditions:
+        ticket_form_payload: Dict = {}
+        if target_field_ids:
+            ticket_form_payload["ticket_field_ids"] = target_field_ids
+        # Always include condition keys when the source form had them, even if
+        # the remapped list is empty. Sending [] explicitly clears any stale
+        # conditions left on the target from a previous run. Omitting the key
+        # entirely (when the source had no conditions) avoids an unnecessary
+        # API round-trip and leaves the target's default state intact.
+        if source_agent_conds is not None:
             ticket_form_payload["agent_conditions"] = agent_conditions
-        if end_user_conditions:
+        if source_end_user_conds is not None:
             ticket_form_payload["end_user_conditions"] = end_user_conditions
 
         payload = {"ticket_form": ticket_form_payload}
@@ -931,7 +943,8 @@ def _migrate_dynamic_content_variants(
         if not isinstance(v, dict):
             continue
         src_item_id = v.get("item_id")
-        locale_id = v.get("locale_id")
+        locale_id = v.get("locale_id")       # integer locale ID (e.g. 1 for en-us)
+        locale_str = v.get("locale", "")     # locale string (e.g. "en-us") for PUT URL
         tgt_item_id = item_map.get(str(src_item_id)) if src_item_id else None
         if not tgt_item_id:
             skipped += 1
@@ -956,22 +969,26 @@ def _migrate_dynamic_content_variants(
                     "dynamic_content_variants",
                     v.get("id"),
                     new_v["id"],
-                    f"item={tgt_item_id} locale={locale_id}",
+                    f"item={tgt_item_id} locale={locale_str or locale_id}",
                 )
                 created += 1
             else:
                 logger.log_failed(
                     "dynamic_content_variants", v.get("id"),
                     "Create response had no 'id' field.",
-                    f"item={tgt_item_id} locale={locale_id}",
+                    f"item={tgt_item_id} locale={locale_str or locale_id}",
                 )
                 failed += 1
         except ZendeskAPIError as exc:
             if exc.status_code == 422:
-                # Variant already exists — update it
+                # Variant already exists — update it.
+                # The PUT path requires the locale STRING (e.g. "en-us"), not
+                # the integer locale_id. Using the integer causes a 404 because
+                # Zendesk routes on the locale code, not the numeric ID.
+                put_locale = locale_str or str(locale_id)
                 try:
                     resp = target.put(
-                        f"dynamic_content/items/{tgt_item_id}/variants/{locale_id}",
+                        f"dynamic_content/items/{tgt_item_id}/variants/{put_locale}",
                         {"variant": payload},
                     )
                     if resp.get("dry_run"):
@@ -981,28 +998,28 @@ def _migrate_dynamic_content_variants(
                         "dynamic_content_variants",
                         v.get("id"),
                         tgt_item_id,
-                        f"item={tgt_item_id} locale={locale_id} (updated)",
+                        f"item={tgt_item_id} locale={put_locale} (updated)",
                     )
                     updated += 1
                 except (ZendeskAPIError, ZendeskNetworkError) as upd_exc:
                     logger.log_failed(
                         "dynamic_content_variants", v.get("id"),
                         f"Update failed: {upd_exc}",
-                        f"item={tgt_item_id} locale={locale_id}",
+                        f"item={tgt_item_id} locale={put_locale}",
                     )
                     failed += 1
             else:
                 logger.log_failed(
                     "dynamic_content_variants", v.get("id"),
                     str(exc),
-                    f"item={tgt_item_id} locale={locale_id}",
+                    f"item={tgt_item_id} locale={locale_str or locale_id}",
                 )
                 failed += 1
         except (ZendeskNetworkError, Exception) as exc:
             logger.log_failed(
                 "dynamic_content_variants", v.get("id"),
                 f"Unexpected error: {type(exc).__name__}: {exc}",
-                f"item={tgt_item_id} locale={locale_id}",
+                f"item={tgt_item_id} locale={locale_str or locale_id}",
             )
             failed += 1
 

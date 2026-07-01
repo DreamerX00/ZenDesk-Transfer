@@ -98,6 +98,27 @@ def run(source: ZendeskClient, target: ZendeskClient,
             return None
         return item
 
+    def _prepare_ticket_field(item: Dict, _id_map: Dict) -> Optional[Dict]:
+        """
+        Skip system fields and strip nested collections that the create API
+        rejects inline. custom_field_options (dropdown/checkbox choices) are
+        stashed under the private key `_custom_field_options` so the importer's
+        _create_one hook can PUT them after the field is created — Zendesk
+        ignores options on the initial POST but accepts them on a subsequent PUT.
+        """
+        item = _skip_system_ticket_field(item, _id_map)
+        if item is None:
+            return None
+        item = dict(item)
+        options = item.pop("custom_field_options", None)
+        item.pop("system_field_options", None)
+        item.pop("custom_statuses", None)
+        if options:
+            # Stash for the post-create PUT (keys prefixed with "_" are
+            # passed through remap_payload untouched per remapper convention).
+            item["_custom_field_options"] = options
+        return item
+
     import_resource(
         client=target, id_map=id_map,
         source_items=exports.get("ticket_fields", []),
@@ -106,11 +127,12 @@ def run(source: ZendeskClient, target: ZendeskClient,
         create_path="ticket_fields", create_rkey="ticket_field",
         create_response_rkey="ticket_field",
         delete_path_fn=lambda tid: f"ticket_fields/{tid}",
+        update_path_fn=lambda tid: f"ticket_fields/{tid}",
         # Ticket fields are identified by `title`, not `name` — without this the
         # collision check never matches, so re-runs duplicate every custom field
         # (and the form-field map drifts to the newest duplicate).
         name_field="title",
-        pre_process_fn=_skip_system_ticket_field,
+        pre_process_fn=_prepare_ticket_field,
         skip_system=False,  # handled by pre_process_fn above
         conflict_mode="skip",
     )

@@ -127,6 +127,64 @@ def test_digit_string_and_int_map_values() -> None:
     assert result[0]["child_fields"][0]["id"] == 910
 
 
+def test_drops_condition_when_all_children_unmapped() -> None:
+    """
+    Regression: when ALL child fields fail to remap, the condition must be
+    dropped entirely rather than sent with child_fields=[]. Sending an empty
+    child_fields list tells Zendesk to show every field unconditionally,
+    which is the opposite of the intended hide/show behaviour.
+    """
+    from src.remapper import remap_form_conditions
+
+    conditions = [
+        {
+            "parent_field_id": 100,
+            "value": "urgent",
+            "child_fields": [
+                {"id": 999},   # not in id_map
+                {"id": 998},   # not in id_map
+            ],
+        },
+        # Second condition has one valid child — must survive.
+        {
+            "parent_field_id": 100,
+            "value": "low",
+            "child_fields": [
+                {"id": 200},   # mapped
+                {"id": 997},   # not in id_map — dropped, but sibling survives
+            ],
+        },
+    ]
+    id_map = {"ticket_fields": {"100": "900", "200": "910"}}
+
+    result = remap_form_conditions(conditions, id_map)
+
+    # First condition dropped — all children unmapped.
+    # Second condition kept — at least one child remapped.
+    assert len(result) == 1
+    assert result[0]["value"] == "low"
+    assert [c["id"] for c in result[0]["child_fields"]] == [910]
+
+
+def test_condition_with_no_source_children_passes_through() -> None:
+    """
+    A condition with an empty child_fields list in the source (edge case)
+    should pass through as-is — there are no children to remap or drop.
+    """
+    from src.remapper import remap_form_conditions
+
+    conditions = [
+        {"parent_field_id": 100, "value": "x", "child_fields": []},
+    ]
+    id_map = {"ticket_fields": {"100": "900"}}
+
+    result = remap_form_conditions(conditions, id_map)
+
+    assert len(result) == 1
+    assert result[0]["parent_field_id"] == 900
+    assert result[0]["child_fields"] == []
+
+
 def _run_all() -> int:
     tests = [
         test_remaps_parent_and_child_ids,
@@ -136,6 +194,8 @@ def _run_all() -> int:
         test_handles_non_list_input,
         test_skips_malformed_entries,
         test_digit_string_and_int_map_values,
+        test_drops_condition_when_all_children_unmapped,
+        test_condition_with_no_source_children_passes_through,
     ]
     failed = 0
     for t in tests:
