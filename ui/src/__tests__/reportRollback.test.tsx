@@ -8,7 +8,7 @@ const { getReport } = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/backend", () => ({
-  downloadUrl: (path: string) => path,
+  downloadFile: vi.fn(),
   getReport,
   listBackups: vi.fn(async () => []),
   listMigrations: vi.fn(async () => []),

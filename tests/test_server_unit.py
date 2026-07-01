@@ -454,6 +454,9 @@ def test_protected_route_requires_auth(tmp_path: Path) -> None:
     # Unknown token
     r = c.get("/api/v1/connections", headers={"Authorization": "Bearer fake"})
     assert r.status_code == 401
+    # Bearer tokens in URLs are rejected to avoid leaking credentials in logs.
+    r = c.get("/api/v1/connections?t=fake")
+    assert r.status_code == 401
 
 
 def test_session_then_connections(tmp_path: Path) -> None:
@@ -547,6 +550,25 @@ def test_standalone_session_works_when_enabled(tmp_path: Path) -> None:
         assert r2.status_code == 200
     finally:
         os.environ.pop("ZDX_STANDALONE_MODE", None)
+
+
+def test_standalone_session_requires_token_for_non_dev_remote(tmp_path: Path) -> None:
+    _fresh_settings(tmp_path)
+    os.environ["ZDX_DEV_MODE"] = "0"
+    os.environ["ZDX_STANDALONE_MODE"] = "1"
+    os.environ["ZDX_STANDALONE_ADMIN_TOKEN"] = "admin-token"
+    try:
+        c = _client(tmp_path)
+        r = c.post("/api/v1/standalone/session")
+        assert r.status_code == 403
+        r = c.post("/api/v1/standalone/session",
+                   headers={"X-Standalone-Token": "admin-token"})
+        assert r.status_code == 200, r.text
+        assert r.json()["token"]
+    finally:
+        os.environ["ZDX_DEV_MODE"] = "1"
+        os.environ.pop("ZDX_STANDALONE_MODE", None)
+        os.environ.pop("ZDX_STANDALONE_ADMIN_TOKEN", None)
 
 
 def test_status_endpoint_validates_migration_id(tmp_path: Path) -> None:

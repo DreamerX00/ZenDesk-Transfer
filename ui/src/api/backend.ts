@@ -275,16 +275,17 @@ export async function getIdMap(migrationId: string): Promise<string> {
   return await _fetchText(`/migrations/${encodeURIComponent(migrationId)}/id-map`);
 }
 
-/**
- * Build a download URL that includes the bearer token as a query-param.
- * Used by <a href> click-to-download — needed because <a> can't carry
- * an Authorization header. The server accepts either bearer source.
- */
-export function downloadUrl(path: string): string {
+export async function downloadFile(path: string, filename: string): Promise<void> {
   if (!_backendUrl) throw new Error("backend URL not configured");
-  const tokParam = _bearer ? `&t=${encodeURIComponent(_bearer)}` : "";
   const sep = path.includes("?") ? "&" : "?";
-  return `${_url(path)}${sep}download=1${tokParam}`;
+  const resp = await fetch(`${_url(path)}${sep}download=1`, {
+    headers: _bearer ? { Authorization: `Bearer ${_bearer}` } : {},
+  });
+  if (!resp.ok) {
+    throw new BackendError(resp.status, await resp.text());
+  }
+  const blob = await resp.blob();
+  triggerBlobDownload(filename, blob);
 }
 
 async function _fetchText(path: string): Promise<string> {
@@ -304,36 +305,96 @@ async function _fetchText(path: string): Promise<string> {
  * Open an SSE connection for live progress. Returns the EventSource
  * so the caller can close() it on unmount.
  *
- * NOTE: EventSource doesn't allow custom headers, so we pass the
- * session token as `?t=` and the server (or a thin proxy) reads it
- * out of the querystring. Today the FastAPI app reads from the
- * Authorization header; this means SSE must rely on a session cookie
- * instead. For Phase D we'll wire credentials: 'include' onto fetch
- * and the cookie path will Just Work. Until then, this helper is
- * used by Phase F tests with the polling fallback.
+ * Uses fetch instead of EventSource so the bearer remains in the
+ * Authorization header and never appears in the URL.
  */
 export function openEventStream(
   migrationId: string,
   onMessage: (rec: unknown) => void,
   onDone: () => void,
   onError: (err: Event) => void,
-): EventSource {
+): { close: () => void } {
   if (!_backendUrl) throw new Error("backend URL not configured");
-  const url =
-    _url(`/jobs/${encodeURIComponent(migrationId)}/events`) +
-    (_bearer ? `?t=${encodeURIComponent(_bearer)}` : "");
-  const es = new EventSource(url, { withCredentials: true });
-  es.onmessage = (e) => {
-    try {
-      onMessage(JSON.parse(e.data));
-    } catch {
-      onMessage(e.data);
+  const controller = new AbortController();
+  void readSseStream(
+    _url(`/jobs/${encodeURIComponent(migrationId)}/events`),
+    controller,
+    onMessage,
+    onDone,
+    onError,
+  );
+  return { close: () => controller.abort() };
+}
+
+function triggerBlobDownload(filename: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function readSseStream(
+  url: string,
+  controller: AbortController,
+  onMessage: (rec: unknown) => void,
+  onDone: () => void,
+  onError: (err: Event) => void,
+): Promise<void> {
+  try {
+    const resp = await fetch(url, {
+      headers: _bearer ? { Authorization: `Bearer ${_bearer}` } : {},
+      signal: controller.signal,
+    });
+    if (!resp.ok || !resp.body) {
+      throw new BackendError(resp.status, await resp.text());
     }
-  };
-  es.addEventListener("done", () => {
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx = buffer.indexOf("\n\n");
+      while (idx >= 0) {
+        const frame = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        handleSseFrame(frame, onMessage, onDone);
+        idx = buffer.indexOf("\n\n");
+      }
+    }
+  } catch (err) {
+    if (controller.signal.aborted) return;
+    onError(new Event(err instanceof Error ? err.message : "sse-error"));
+  }
+}
+
+function handleSseFrame(
+  frame: string,
+  onMessage: (rec: unknown) => void,
+  onDone: () => void,
+): void {
+  const lines = frame.split(/\r?\n/);
+  const event = lines
+    .find((line) => line.startsWith("event:"))
+    ?.slice("event:".length)
+    .trim();
+  const data = lines
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trimStart())
+    .join("\n");
+  if (event === "done") {
     onDone();
-    es.close();
-  });
-  es.onerror = onError;
-  return es;
+    return;
+  }
+  if (!data) return;
+  try {
+    onMessage(JSON.parse(data));
+  } catch {
+    onMessage(data);
+  }
 }

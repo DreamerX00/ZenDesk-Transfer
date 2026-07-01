@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import {
-  downloadUrl,
+  downloadFile,
   getReport,
   listBackups,
   listMigrations,
@@ -632,7 +632,16 @@ function HistoryPanel() {
               </td>
               <td>
                 {m.has_log ? (
-                  <a href={downloadUrl(`/migrations/${encodeURIComponent(m.migration_id)}/log`)} className="zd-button zd-button--secondary" download>Download</a>
+                  <button
+                    onClick={() => void downloadFile(
+                      `/migrations/${encodeURIComponent(m.migration_id)}/log`,
+                      `migration_log_${m.migration_id}.jsonl`,
+                    )}
+                    className="zd-button zd-button--secondary"
+                    type="button"
+                  >
+                    Download
+                  </button>
                 ) : <span style={{ color: "var(--text-faint)" }}>—</span>}
               </td>
             </tr>
@@ -684,11 +693,38 @@ function DownloadActions({ migrationId, reportMarkdown }: { migrationId: string;
 
   return (
     <div className="zd-inline-actions" style={{ marginTop: 12, gap: 8 }}>
-      <a href={downloadUrl(`/migrations/${encodeURIComponent(migrationId)}/report`)} className="zd-button zd-button--secondary" download>Download .md</a>
+      <button
+        onClick={() => void downloadFile(
+          `/migrations/${encodeURIComponent(migrationId)}/report`,
+          `migration_report_${migrationId}.md`,
+        )}
+        className="zd-button zd-button--secondary"
+        type="button"
+      >
+        Download .md
+      </button>
       <button onClick={downloadHtml} className="zd-button zd-button--secondary" type="button">Download .html</button>
       <button onClick={printReport} className="zd-button zd-button--secondary" type="button">Print / PDF</button>
-      <a href={downloadUrl(`/migrations/${encodeURIComponent(migrationId)}/log`)} className="zd-button zd-button--secondary" download>Audit log (.jsonl)</a>
-      <a href={downloadUrl(`/migrations/${encodeURIComponent(migrationId)}/id-map`)} className="zd-button zd-button--secondary" download>ID map (.json)</a>
+      <button
+        onClick={() => void downloadFile(
+          `/migrations/${encodeURIComponent(migrationId)}/log`,
+          `migration_log_${migrationId}.jsonl`,
+        )}
+        className="zd-button zd-button--secondary"
+        type="button"
+      >
+        Audit log (.jsonl)
+      </button>
+      <button
+        onClick={() => void downloadFile(
+          `/migrations/${encodeURIComponent(migrationId)}/id-map`,
+          `id_map_${migrationId}.json`,
+        )}
+        className="zd-button zd-button--secondary"
+        type="button"
+      >
+        ID map (.json)
+      </button>
     </div>
   );
 }

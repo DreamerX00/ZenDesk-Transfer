@@ -77,6 +77,7 @@ services:
       ZDX_BACKEND_URL: ${ZDX_BACKEND_URL:-http://localhost:8080}
       ZDX_CORS_ORIGINS: ${ZDX_CORS_ORIGINS:-}
       ZDX_STANDALONE_MODE: ${ZDX_STANDALONE_MODE:-0}
+      ZDX_STANDALONE_ADMIN_TOKEN: ${ZDX_STANDALONE_ADMIN_TOKEN:-}
     depends_on:
       redis:
         condition: service_healthy

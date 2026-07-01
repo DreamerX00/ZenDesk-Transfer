@@ -16,6 +16,7 @@ resources, 500 for server-side bugs.
 from __future__ import annotations
 
 import html
+import ipaddress
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -105,16 +106,13 @@ app.add_middleware(
 
 def require_session(
     authorization: Optional[str] = Header(None),
-    t: Optional[str] = Query(None),
 ) -> "object":
     """Validate the iframe session token. Returns the IframeSession
     object on success, raises 401 otherwise.
 
-    Token sources, in priority order:
-      1. `Authorization: Bearer <token>` header (preferred — used by
-         every fetch() call).
-      2. `?t=<token>` query parameter (fallback for browser flows
-         that can't set headers: <a href> downloads, EventSource SSE).
+    The token must be sent as `Authorization: Bearer <token>`. Query
+    string bearer tokens are intentionally rejected so credentials do
+    not land in access logs, browser history, referrers, or screenshots.
 
     Routes that don't need iframe auth (health, oauth/*, session)
     omit this dependency.
@@ -122,8 +120,6 @@ def require_session(
     token: Optional[str] = None
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(None, 1)[1].strip()
-    elif t:
-        token = t.strip()
     if not token:
         raise HTTPException(status_code=401, detail={"error": "missing or malformed Authorization header", "kind": "AuthError"})
     sess = get_iframe_session(token)
@@ -276,7 +272,10 @@ def delete_session(sess=Depends(require_session)) -> Dict[str, bool]:
 
 
 @app.post("/api/v1/standalone/session")
-def post_standalone_session() -> Dict[str, Any]:
+def post_standalone_session(
+    request: Request,
+    x_standalone_token: Optional[str] = Header(None),
+) -> Dict[str, Any]:
     """No-HMAC session for the bundled standalone UI. Only available
     when ZDX_STANDALONE_MODE=1 — otherwise 404, so a misconfigured
     production deployment doesn't accidentally expose an auth bypass."""
@@ -284,6 +283,10 @@ def post_standalone_session() -> Dict[str, Any]:
         raise HTTPException(status_code=404,
                             detail={"error": "standalone mode disabled",
                                     "kind": "NotFound"})
+    if not _standalone_access_allowed(request, x_standalone_token):
+        raise HTTPException(status_code=403,
+                            detail={"error": "standalone access requires loopback or a valid standalone token",
+                                    "kind": "AuthError"})
     sess = mint_standalone_session()
     return {
         "token": sess.token,
@@ -291,6 +294,22 @@ def post_standalone_session() -> Dict[str, Any]:
         "user_id": sess.user_id,
         "user_email": sess.user_email,
     }
+
+
+def _standalone_access_allowed(
+    request: Request,
+    supplied_token: Optional[str],
+) -> bool:
+    s = get_settings()
+    if s.standalone_admin_token and supplied_token == s.standalone_admin_token:
+        return True
+    if s.dev_mode:
+        return True
+    host = request.client.host if request.client else ""
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host == "localhost"
 
 
 # ---- OAuth -------------------------------------------------------- #
@@ -591,14 +610,9 @@ def jobs_status(
 @app.get("/api/v1/jobs/{migration_id}/events")
 async def jobs_events(
     migration_id: str = PathParam(...),
-    authorization: Optional[str] = Header(None),
-    t: Optional[str] = Query(None),
+    sess=Depends(require_session),
 ):
-    """Server-Sent Events stream. SSE doesn't allow custom headers in
-    EventSource, so the iframe passes the session token as a query
-    parameter `?t=...` OR via Authorization header (we accept both).
-    """
-    require_session(authorization, t=t)
+    """Server-Sent Events stream for clients that can send Authorization."""
     if not is_valid_migration_id(migration_id):
         raise HTTPException(status_code=400, detail={"error": "invalid migration_id", "kind": "ValueError"})
 

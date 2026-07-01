@@ -46,7 +46,7 @@ class Settings:
     """
 
     # --- HTTP -----------------------------------------------------------
-    host: str = field(default_factory=lambda: os.environ.get("ZDX_HOST", "0.0.0.0"))
+    host: str = field(default_factory=lambda: os.environ.get("ZDX_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: int(os.environ.get("ZDX_PORT", "8080")))
     backend_url: str = field(default_factory=lambda:
         os.environ.get("ZDX_BACKEND_URL", "http://localhost:8080").rstrip("/"))
@@ -99,6 +99,8 @@ class Settings:
     # browser on the same machine. **Disabled by default** — production
     # deployments behind the Zendesk app should leave this off.
     standalone_mode: bool = field(default_factory=lambda: _env_bool("ZDX_STANDALONE_MODE", False))
+    standalone_admin_token: str = field(default_factory=lambda:
+        os.environ.get("ZDX_STANDALONE_ADMIN_TOKEN", ""))
 
     # Directory holding the built UI bundle (iframe.html + assets).
     # Empty string = UI serving disabled.
