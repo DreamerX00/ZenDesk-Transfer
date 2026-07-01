@@ -74,6 +74,7 @@ class FakeImportClient:
         self.dry_run = False
         self._existing = existing
         self.posts = []
+        self.puts = []
         self.deletes = []
 
     def list_resource(self, path, key):
@@ -81,7 +82,22 @@ class FakeImportClient:
 
     def post(self, path, payload):
         self.posts.append((path, payload))
-        return {"group": {"id": 999}}
+        # Derive response key from the payload's own key
+        rkey = next(iter(payload), "group")
+        return {rkey: {"id": 999}}
+
+    def put(self, path, payload):
+        self.puts.append((path, payload))
+        # Derive response key from the payload's own key
+        rkey = next(iter(payload), "ticket_field")
+        return {rkey: {"id": self._resolve_id(path)}}
+
+    def _resolve_id(self, path):
+        items = path.split("/")
+        for item in items:
+            if item.isdigit():
+                return int(item)
+        return 999
 
     def delete(self, path):
         self.deletes.append(path)
@@ -283,6 +299,132 @@ def test_importer_skip_creates_when_no_conflict(tmp_path: Path) -> None:
 
     assert len(client.posts) == 1            # created
     assert id_map.get("groups", {}).get("5") == "999"
+    _reset_importer_globals()
+
+
+# ------------------------------------------------------------------ #
+#  custom_field_options cleanup: option-level IDs stripped           #
+# ------------------------------------------------------------------ #
+
+def test_prepare_ticket_field_strips_option_ids(tmp_path: Path) -> None:
+    """
+    prepare_ticket_field must strip source-specific `id`, `raw_name`, and
+    `raw_value` from each custom_field_options entry. Sending source option
+    IDs to the target causes Zendesk to reject the options PUT, leaving the
+    field with no options and breaking conditional form rules that reference
+    option value strings.
+    """
+    _fresh(tmp_path)
+    from src.phases.phase1_foundation import prepare_ticket_field
+
+    item = {
+        "id": 100,
+        "type": "tagger",
+        "title": "Cloud",
+        "custom_field_options": [
+            {
+                "id": 1,
+                "name": "AWS",
+                "raw_name": "AWS",
+                "value": "aws",
+                "raw_value": "aws",
+                "position": 0,
+                "default": True,
+            },
+            {
+                "id": 2,
+                "name": "GCP",
+                "raw_name": "GCP",
+                "value": "gcp",
+                "raw_value": "gcp",
+                "position": 1,
+                "default": False,
+            },
+        ],
+    }
+
+    result = prepare_ticket_field(item, {})
+    assert result is not None
+    stashed = result.get("_custom_field_options")
+    assert stashed is not None, "custom_field_options should be stashed under _custom_field_options"
+    assert len(stashed) == 2
+
+    for opt in stashed:
+        assert "id" not in opt, f"source option ID should be stripped: {opt}"
+        assert "raw_name" not in opt, f"raw_name should be stripped: {opt}"
+        assert "raw_value" not in opt, f"raw_value should be stripped: {opt}"
+        # Core fields must survive
+        assert "name" in opt
+        assert "value" in opt
+        assert "position" in opt
+
+    assert stashed[0]["name"] == "AWS"
+    assert stashed[0]["value"] == "aws"
+    assert stashed[1]["name"] == "GCP"
+    assert stashed[1]["value"] == "gcp"
+
+
+def test_importer_skip_applies_custom_field_options_to_existing(tmp_path: Path) -> None:
+    """
+    When conflict_mode='skip' matches an existing ticket field by title,
+    the importer must still PUT the source's custom_field_options onto the
+    existing target field. Without this, option value strings differ between
+    source and target, and conditional form rules referencing option values
+    (agent_conditions / end_user_conditions) silently fail.
+    """
+    _fresh(tmp_path)
+    from src.importer import import_resource
+
+    existing_target = [
+        {"id": 555, "title": "Cloud", "type": "tagger",
+         "custom_field_options": []}
+    ]
+    client = FakeImportClient(existing=existing_target)
+
+    id_map: dict = {}
+
+    from src.phases.phase1_foundation import prepare_ticket_field
+
+    import_resource(
+        client=client, id_map=id_map,
+        source_items=[{
+            "id": 100,
+            "type": "tagger",
+            "title": "Cloud",
+            "custom_field_options": [
+                {"name": "AWS", "value": "aws", "position": 0},
+                {"name": "GCP", "value": "gcp", "position": 1},
+                {"name": "Azure", "value": "azure", "position": 2},
+            ],
+        }],
+        resource_key="ticket_fields",
+        list_path="ticket_fields", list_rkey="ticket_fields",
+        create_path="ticket_fields", create_rkey="ticket_field",
+        create_response_rkey="ticket_field",
+        delete_path_fn=lambda tid: f"ticket_fields/{tid}",
+        name_field="title",
+        pre_process_fn=prepare_ticket_field,
+        conflict_mode="skip",
+        update_path_fn=lambda tid: f"ticket_fields/{tid}",
+    )
+
+    # Field was skipped (already exists), not created
+    assert client.posts == [], "existing field should NOT be re-created"
+
+    # But custom_field_options must have been PUT to the existing field
+    assert len(client.puts) >= 1, "options must be PUT to existing field"
+    put_path, put_payload = client.puts[0]
+    assert put_path == "ticket_fields/555"
+    cf_opts = put_payload.get("ticket_field", {}).get("custom_field_options", [])
+    assert len(cf_opts) == 3
+    assert cf_opts[0]["name"] == "AWS"
+    assert cf_opts[0]["value"] == "aws"
+    assert cf_opts[1]["name"] == "GCP"
+    assert cf_opts[2]["name"] == "Azure"
+
+    # Mapping must still be recorded
+    assert id_map.get("ticket_fields", {}).get("100") == "555"
+
     _reset_importer_globals()
 
 

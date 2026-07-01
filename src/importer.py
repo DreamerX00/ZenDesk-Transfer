@@ -354,6 +354,30 @@ def import_resource(
                 # the batched organization importer already performs.)
                 if conflict_id is not None and source_id is not None:
                     _record_mapping(id_map, resource_key, source_id, conflict_id)
+
+                    # Apply custom_field_options to existing dropdown/checkbox
+                    # fields so their option value strings match the source.
+                    # Without this, conditional form rules
+                    # (agent_conditions/end_user_conditions) that reference
+                    # option values (e.g. value="aws") silently fail on the
+                    # target because the parent field has different or missing
+                    # options.
+                    deferred_options = payload.get("_custom_field_options")
+                    if deferred_options and update_path_fn:
+                        try:
+                            client.put(
+                                update_path_fn(conflict_id),
+                                {create_rkey: {"custom_field_options": deferred_options}},
+                            )
+                        except Exception as exc:
+                            logger.warn(
+                                f"Failed to apply custom_field_options for "
+                                f"existing {resource_key} '{item_name}' "
+                                f"(id={conflict_id}): {exc}. "
+                                "Dropdown/checkbox options on target may "
+                                "not match source."
+                            )
+
                     logger.log_skipped(
                         resource_key, source_id,
                         f"Target already has a {resource_key} named "

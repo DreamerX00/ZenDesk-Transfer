@@ -6,7 +6,7 @@ Migrates (in strict dependency order):
   Custom Roles → Ticket Forms → Organizations
 
 Bug fixes vs v1:
-  - _skip_system_ticket_field return type uses Optional[Dict] instead of
+  - skip_system_ticket_field return type uses Optional[Dict] instead of
     Python 3.10+ Dict | None union syntax for 3.8/3.9 compatibility.
 """
 
@@ -22,6 +22,64 @@ from src.remapper import (
     RemapError,
 )
 from src.utils import logger
+
+SYSTEM_TYPES = {
+    "subject", "description", "status", "custom_status",
+    "priority", "tickettype", "type",
+    "assignee", "group", "requester", "organization", "tags",
+    "ticket_form_id", "brand_id", "due_at",
+}
+
+
+def skip_system_ticket_field(item: Dict,
+                              _id_map: Dict) -> Optional[Dict]:
+    """Skip built-in system fields — they already exist in every account.
+
+    Field `type` values are the ones the Zendesk API actually returns: the
+    "Type" field is ``tickettype`` (not ``type``) and the "Ticket status"
+    field is ``custom_status``. Both are system fields that cannot be created
+    via POST /ticket_fields, so they must be skipped here — otherwise the
+    importer tries to create them and logs a spurious failure.
+    """
+    if item.get("type") in SYSTEM_TYPES:
+        return None
+    return item
+
+
+def prepare_ticket_field(item: Dict, _id_map: Dict) -> Optional[Dict]:
+    """
+    Skip system fields and strip nested collections that the create API
+    rejects inline. custom_field_options (dropdown/checkbox choices) are
+    stashed under the private key `_custom_field_options` so the importer's
+    _create_one hook can PUT them after the field is created — Zendesk
+    ignores options on the initial POST but accepts them on a subsequent PUT.
+
+    Source-specific `id` values in each option are stripped because they
+    reference option IDs that do not exist on the target. Sending them
+    causes Zendesk to reject the entire options update (422), leaving the
+    field with no options and breaking conditional form rules
+    (agent_conditions / end_user_conditions) that reference option values.
+    Read-only fields `raw_name` and `raw_value` are also stripped.
+    """
+    item = skip_system_ticket_field(item, _id_map)
+    if item is None:
+        return None
+    item = dict(item)
+    options = item.pop("custom_field_options", None)
+    item.pop("system_field_options", None)
+    item.pop("custom_statuses", None)
+    if options:
+        cleaned = []
+        for opt in options:
+            if not isinstance(opt, dict):
+                continue
+            cleaned_opt = {
+                k: v for k, v in opt.items()
+                if k not in ("id", "raw_name", "raw_value")
+            }
+            cleaned.append(cleaned_opt)
+        item["_custom_field_options"] = cleaned
+    return item
 
 
 def run(source: ZendeskClient, target: ZendeskClient,
@@ -77,47 +135,63 @@ def run(source: ZendeskClient, target: ZendeskClient,
     # ---- 2.3  Ticket Fields ------------------------------------------ #
     logger.section("2.3  Ticket Fields (custom only)")
 
-    # Bug fix: use Optional[Dict] instead of Dict | None (Python 3.10+ only)
-    def _skip_system_ticket_field(item: Dict,
-                                   _id_map: Dict) -> Optional[Dict]:
-        """Skip built-in system fields — they already exist in every account.
+    # Pre-reconciliation: before running the create loop, scan ALL existing
+    # target ticket fields and reconcile source→target mappings by title.
+    # This handles re-runs where the target already has fields from a previous
+    # (possibly partial) run whose id_map was lost or incomplete.
+    #
+    # When the target has DUPLICATE fields with the same title (from multiple
+    # failed runs), we pick the one with the HIGHEST target ID — Zendesk
+    # assigns IDs sequentially, so the highest ID is the most recently created
+    # field, which is the one most likely to have the correct options/config.
+    #
+    # This pre-reconciliation runs BEFORE the create loop so that the
+    # conflict_mode="skip" check correctly finds and skips already-existing
+    # fields, and the id_map has the right target IDs for form conditions.
+    try:
+        _existing_target_fields = target.list_resource("ticket_fields", "ticket_fields")
+        # Build title→highest_id map for non-system target fields
+        _target_by_title: Dict[str, int] = {}
+        for tf in _existing_target_fields:
+            if not isinstance(tf, dict):
+                continue
+            if tf.get("type") in SYSTEM_TYPES:
+                continue
+            title = tf.get("title", "")
+            tid = tf.get("id")
+            if not title or not tid:
+                continue
+            # Keep the highest ID (most recently created) when duplicates exist
+            if title not in _target_by_title or tid > _target_by_title[title]:
+                _target_by_title[title] = tid
 
-        Field `type` values are the ones the Zendesk API actually returns: the
-        "Type" field is ``tickettype`` (not ``type``) and the "Ticket status"
-        field is ``custom_status``. Both are system fields that cannot be created
-        via POST /ticket_fields, so they must be skipped here — otherwise the
-        importer tries to create them and logs a spurious failure.
-        """
-        SYSTEM_TYPES = {
-            "subject", "description", "status", "custom_status",
-            "priority", "tickettype", "type",
-            "assignee", "group", "requester", "organization", "tags",
-            "ticket_form_id", "brand_id", "due_at",
-        }
-        if item.get("type") in SYSTEM_TYPES:
-            return None
-        return item
+        _pre_reconciled = 0
+        for src_field in exports.get("ticket_fields", []):
+            if not isinstance(src_field, dict):
+                continue
+            if src_field.get("type") in SYSTEM_TYPES:
+                continue
+            src_id = src_field.get("id")
+            src_title = src_field.get("title", "")
+            if not src_id or not src_title:
+                continue
+            if str(src_id) in id_map.get("ticket_fields", {}):
+                continue  # already mapped
+            tgt_id = _target_by_title.get(src_title)
+            if tgt_id:
+                _record_mapping(id_map, "ticket_fields", src_id, tgt_id)
+                _pre_reconciled += 1
 
-    def _prepare_ticket_field(item: Dict, _id_map: Dict) -> Optional[Dict]:
-        """
-        Skip system fields and strip nested collections that the create API
-        rejects inline. custom_field_options (dropdown/checkbox choices) are
-        stashed under the private key `_custom_field_options` so the importer's
-        _create_one hook can PUT them after the field is created — Zendesk
-        ignores options on the initial POST but accepts them on a subsequent PUT.
-        """
-        item = _skip_system_ticket_field(item, _id_map)
-        if item is None:
-            return None
-        item = dict(item)
-        options = item.pop("custom_field_options", None)
-        item.pop("system_field_options", None)
-        item.pop("custom_statuses", None)
-        if options:
-            # Stash for the post-create PUT (keys prefixed with "_" are
-            # passed through remap_payload untouched per remapper convention).
-            item["_custom_field_options"] = options
-        return item
+        if _pre_reconciled:
+            logger.info(
+                f"  Pre-reconciled {_pre_reconciled} ticket field(s) by title "
+                "from existing target fields (re-run recovery)."
+            )
+    except (ZendeskAPIError, ZendeskNetworkError) as exc:
+        logger.warn(
+            f"Could not pre-reconcile ticket fields from target: {exc}. "
+            "Proceeding — conflict_mode='skip' will handle collisions."
+        )
 
     import_resource(
         client=target, id_map=id_map,
@@ -132,7 +206,7 @@ def run(source: ZendeskClient, target: ZendeskClient,
         # collision check never matches, so re-runs duplicate every custom field
         # (and the form-field map drifts to the newest duplicate).
         name_field="title",
-        pre_process_fn=_prepare_ticket_field,
+        pre_process_fn=prepare_ticket_field,
         skip_system=False,  # handled by pre_process_fn above
         conflict_mode="skip",
     )
