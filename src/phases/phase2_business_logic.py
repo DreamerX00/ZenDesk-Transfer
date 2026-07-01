@@ -53,6 +53,36 @@ def run(source: ZendeskClient, target: ZendeskClient,
         pre_process_fn=_prepare_rule,
         conflict_mode="replace",
     )
+    logger.section("3.2c  View Ordering")
+    _restore_rule_positions(
+        target, id_map, exports.get("views", []),
+        resource_key="views", id_map_key="views",
+        update_path_fn=lambda tid: f"views/{tid}",
+        wrap_key="view",
+    )
+
+    # ---- 3.2b  Custom Ticket Statuses -------------------------------- #
+    # Custom statuses are referenced by trigger/automation conditions via
+    # the `custom_status_id` field. They must exist on the target before
+    # triggers are migrated so the condition values can be remapped.
+    logger.section("3.2b  Custom Ticket Statuses")
+    if exports.get("custom_statuses"):
+        import_resource(
+            client=target, id_map=id_map,
+            source_items=exports.get("custom_statuses", []),
+            resource_key="custom_statuses",
+            list_path="custom_statuses", list_rkey="custom_statuses",
+            create_path="custom_statuses", create_rkey="custom_status",
+            create_response_rkey="custom_status",
+            delete_path_fn=lambda tid: f"custom_statuses/{tid}",
+            name_field="agent_label",
+            conflict_mode="skip",
+        )
+    else:
+        logger.info(
+            "  No custom ticket statuses in export — skipping. "
+            "(Expected if the source account does not use custom statuses.)"
+        )
 
     # ---- 3.3  Trigger Categories ------------------------------------- #
     logger.section("3.3  Trigger Categories")
@@ -81,9 +111,16 @@ def run(source: ZendeskClient, target: ZendeskClient,
         post_process_fn=_assign_trigger_category,
         conflict_mode="replace",
     )
+    logger.section("3.4b  Trigger Ordering")
+    _restore_rule_positions(
+        target, id_map, exports.get("triggers", []),
+        resource_key="triggers", id_map_key="triggers",
+        update_path_fn=lambda tid: f"triggers/{tid}",
+        wrap_key="trigger",
+    )
 
     # ---- 3.5  Automations -------------------------------------------- #
-    logger.section("3.4  Automations")
+    logger.section("3.5  Automations")
     import_resource(
         client=target, id_map=id_map,
         source_items=exports.get("automations", []),
@@ -94,6 +131,13 @@ def run(source: ZendeskClient, target: ZendeskClient,
         delete_path_fn=lambda tid: f"automations/{tid}",
         pre_process_fn=_prepare_rule,
         conflict_mode="replace",
+    )
+    logger.section("3.5b  Automation Ordering")
+    _restore_rule_positions(
+        target, id_map, exports.get("automations", []),
+        resource_key="automations", id_map_key="automations",
+        update_path_fn=lambda tid: f"automations/{tid}",
+        wrap_key="automation",
     )
 
     # ---- 3.6  Macros ------------------------------------------------- #
@@ -172,6 +216,14 @@ def run(source: ZendeskClient, target: ZendeskClient,
             delete_path_fn=lambda tid: f"routing/attributes/{tid}",
             conflict_mode="replace",
         )
+
+        # ---- 3.10b  Routing Attribute Values (skills) ---------------- #
+        # Skill option values are nested under each attribute and must be
+        # migrated after the attribute definitions exist on the target.
+        logger.section("3.10b  Routing Attribute Values (skills)")
+        _migrate_routing_attribute_values(
+            target, id_map, exports.get("routing_attribute_values", [])
+        )
     else:
         logger.log_manual(
             "routing_attributes",
@@ -194,6 +246,14 @@ def run(source: ZendeskClient, target: ZendeskClient,
         conflict_mode="replace",
     )
 
+    # ---- 3.11b  Dynamic Content Locale Variants ---------------------- #
+    # Non-default locale variants are nested under each item and must be
+    # migrated after the item definitions exist on the target.
+    logger.section("3.11b  Dynamic Content Locale Variants")
+    _migrate_dynamic_content_variants(
+        target, id_map, exports.get("dynamic_content_variants", [])
+    )
+
     # ---- 3.12  Webhooks ---------------------------------------------- #
     logger.section("3.12  Webhooks")
     import_resource(
@@ -205,6 +265,7 @@ def run(source: ZendeskClient, target: ZendeskClient,
         create_response_rkey="webhook",
         delete_path_fn=lambda tid: f"webhooks/{tid}",
         pre_process_fn=_scrub_webhook_secret,
+        post_process_fn=_remap_webhook_subscriptions,
         conflict_mode="replace",
     )
 
@@ -219,6 +280,75 @@ def run(source: ZendeskClient, target: ZendeskClient,
     flush_id_map(id_map)
     logger.success("Phase 3 — Business Logic complete.")
     return id_map
+
+
+def _restore_rule_positions(
+    target: ZendeskClient,
+    id_map: Dict,
+    source_items: List[Dict],
+    *,
+    resource_key: str,
+    id_map_key: str,
+    update_path_fn,
+    wrap_key: str,
+) -> None:
+    """
+    Restore `position` ordering for views, triggers, and automations.
+
+    Zendesk assigns positions by insertion order on create. After all items
+    of a type exist on the target, we PUT each item's position so the
+    execution/display order matches the source exactly.
+
+    Only items with an explicit `position` value that were successfully
+    migrated (present in id_map) are updated.
+    """
+    resource_map = id_map.get(id_map_key, {})
+    if not isinstance(resource_map, dict) or not source_items:
+        return
+
+    updated = skipped = failed = 0
+    for item in source_items:
+        if not isinstance(item, dict):
+            continue
+        src_id = item.get("id")
+        position = item.get("position")
+        if position is None:
+            continue
+        tgt_id = resource_map.get(str(src_id))
+        if not tgt_id:
+            skipped += 1
+            continue
+        try:
+            resp = target.put(
+                update_path_fn(tgt_id),
+                {wrap_key: {"position": int(position)}},
+            )
+            if isinstance(resp, dict) and resp.get("dry_run"):
+                skipped += 1
+                continue
+            updated += 1
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.log_failed(
+                f"{resource_key}_position", src_id,
+                f"Failed to set position={position}: {exc}",
+                item.get("title") or item.get("name", ""),
+            )
+            failed += 1
+        except Exception as exc:
+            logger.log_failed(
+                f"{resource_key}_position", src_id,
+                f"Unexpected error: {type(exc).__name__}: {exc}",
+                item.get("title") or item.get("name", ""),
+            )
+            failed += 1
+
+    if updated or failed:
+        logger.success(
+            f"{resource_key} positions: {updated} updated, "
+            f"{failed} failed, {skipped} skipped."
+        )
+    else:
+        logger.info(f"  No {resource_key} positions to restore.")
 
 
 def _scan_subdomain_references(
@@ -389,6 +519,18 @@ def _assign_form_fields(target: ZendeskClient, id_map: Dict,
             form.get("end_user_conditions"), cond_id_map, context=form_ctx
         )
 
+        # Fix P1-O: if every source field failed to remap, target_field_ids is
+        # []. Sending ticket_field_ids=[] would wipe the form's field layout on
+        # the target. Skip the PUT entirely and log a warning so the operator
+        # knows the form layout was not updated.
+        if not target_field_ids:
+            logger.warn(
+                f"ticket_form_fields: skipping form '{form.get('name', source_form_id)}' "
+                f"(target_form_id={target_form_id}) — all source field IDs failed to remap. "
+                "The form's field layout on the target is unchanged."
+            )
+            continue
+
         ticket_form_payload = {
             "ticket_field_ids": target_field_ids,
         }
@@ -531,6 +673,70 @@ def _assign_macro_actions(payload: Dict, id_map: Dict) -> Dict:
     return payload
 
 
+def _remap_webhook_subscriptions(payload: Dict, id_map: Dict) -> Dict:
+    """
+    Post-process: remap the `subscriptions` array on a webhook payload.
+
+    Zendesk webhook subscriptions reference trigger or automation IDs via
+    the shape:
+        {"event_type": "conditional_ticket_events", "resource_type": "trigger",
+         "resource_id": <source_trigger_id>}
+
+    After triggers and automations are migrated (steps 3.4 / 3.5), their
+    source→target ID mappings are in id_map["triggers"] and
+    id_map["automations"]. We remap each subscription's resource_id here.
+
+    Subscriptions whose resource_id has no mapping (e.g. the trigger was
+    skipped or failed) are dropped and logged as MANUAL — a dangling
+    subscription would cause Zendesk to reject the webhook create with a
+    422 referencing a non-existent trigger.
+    """
+    subs = payload.get("subscriptions")
+    if not isinstance(subs, list) or not subs:
+        return payload
+
+    webhook_name = payload.get("name", "<unnamed>")
+    remapped: list = []
+    for sub in subs:
+        if not isinstance(sub, dict):
+            continue
+        rtype = sub.get("resource_type", "")
+        rid = sub.get("resource_id")
+        if rid is None:
+            remapped.append(sub)
+            continue
+
+        # Map resource_type → id_map category
+        category_map = {
+            "trigger":    "triggers",
+            "automation": "automations",
+        }
+        category = category_map.get(rtype)
+        if category is None:
+            # Unknown resource type — pass through unchanged
+            remapped.append(sub)
+            continue
+
+        mapping = id_map.get(category, {})
+        target_rid = mapping.get(str(rid))
+        if target_rid is None:
+            logger.log_manual(
+                "webhooks",
+                f"Webhook '{webhook_name}': subscription references "
+                f"{rtype} id={rid} which was not migrated — subscription dropped. "
+                "Re-add it manually in the target account.",
+            )
+            continue
+
+        new_sub = dict(sub)
+        new_sub["resource_id"] = int(target_rid) if str(target_rid).isdigit() else target_rid
+        remapped.append(new_sub)
+
+    payload = dict(payload)
+    payload["subscriptions"] = remapped
+    return payload
+
+
 def _scrub_webhook_secret(item: Dict, _id_map: Dict) -> Optional[Dict]:
     """
     Webhook signing secrets cannot be read from the API.
@@ -568,3 +774,239 @@ def _scrub_webhook_secret(item: Dict, _id_map: Dict) -> Optional[Dict]:
         "Update your endpoint's validation logic accordingly."
     )
     return item
+
+
+def _migrate_routing_attribute_values(
+    target: ZendeskClient,
+    id_map: Dict,
+    source_values: List[Dict],
+) -> None:
+    """
+    Migrate routing attribute skill values to the target.
+
+    Each value record was augmented by the extractor with an `attribute_id`
+    field pointing to its parent source attribute. We resolve that to the
+    target attribute ID via id_map["routing_attributes"], then POST the value
+    under the correct target attribute.
+
+    Conflict handling: Zendesk returns 422 if a value with the same name
+    already exists under the attribute. We list existing values per attribute
+    and skip duplicates by name.
+    """
+    if not source_values:
+        logger.info("  No routing attribute values to migrate.")
+        return
+
+    attr_map = id_map.get("routing_attributes", {})
+    if not isinstance(attr_map, dict):
+        logger.warn(
+            "routing_attribute_values: routing_attributes map missing — "
+            "cannot migrate skill values."
+        )
+        return
+
+    # Group source values by their source attribute_id for efficient processing
+    from collections import defaultdict as _defaultdict
+    by_attr: Dict[str, List[Dict]] = _defaultdict(list)
+    for v in source_values:
+        if isinstance(v, dict):
+            by_attr[str(v.get("attribute_id", ""))].append(v)
+
+    created = skipped = failed = 0
+    for src_attr_id, values in by_attr.items():
+        tgt_attr_id = attr_map.get(src_attr_id)
+        if not tgt_attr_id:
+            for v in values:
+                logger.log_skipped(
+                    "routing_attribute_values", v.get("id"),
+                    f"Parent attribute {src_attr_id} was not migrated",
+                )
+                skipped += 1
+            continue
+
+        # Fetch existing values on the target attribute to avoid duplicates
+        existing_names: set = set()
+        try:
+            existing = target.list_resource(
+                f"routing/attributes/{tgt_attr_id}/values",
+                "attribute_values",
+            )
+            existing_names = {
+                e.get("name", "") for e in existing if isinstance(e, dict)
+            }
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.warn(
+                f"Could not list existing values for routing attribute "
+                f"{tgt_attr_id}: {exc}. Proceeding without dedup."
+            )
+
+        for v in values:
+            src_val_id = v.get("id")
+            name = v.get("name", f"<unnamed id={src_val_id}>")
+            if name in existing_names:
+                logger.log_skipped(
+                    "routing_attribute_values", src_val_id,
+                    f"Value '{name}' already exists under target attribute {tgt_attr_id}",
+                )
+                skipped += 1
+                continue
+
+            payload = {"attribute_value": {"name": name}}
+            try:
+                resp = target.post(
+                    f"routing/attributes/{tgt_attr_id}/values", payload
+                )
+                if resp.get("dry_run"):
+                    skipped += 1
+                    continue
+                new_val = resp.get("attribute_value") or {}
+                new_id = new_val.get("id")
+                if new_id:
+                    from src.importer import _record_mapping
+                    _record_mapping(id_map, "routing_attribute_values", src_val_id, new_id)
+                    logger.log_created(
+                        "routing_attribute_values", src_val_id, new_id, name
+                    )
+                    existing_names.add(name)
+                    created += 1
+                else:
+                    logger.log_failed(
+                        "routing_attribute_values", src_val_id,
+                        "Create response had no 'id' field.", name,
+                    )
+                    failed += 1
+            except (ZendeskAPIError, ZendeskNetworkError) as exc:
+                logger.log_failed(
+                    "routing_attribute_values", src_val_id, str(exc), name
+                )
+                failed += 1
+            except Exception as exc:
+                logger.log_failed(
+                    "routing_attribute_values", src_val_id,
+                    f"Unexpected error: {type(exc).__name__}: {exc}", name,
+                )
+                failed += 1
+
+    logger.success(
+        f"Routing attribute values: {created} created, "
+        f"{failed} failed, {skipped} skipped."
+    )
+
+
+def _migrate_dynamic_content_variants(
+    target: ZendeskClient,
+    id_map: Dict,
+    source_variants: List[Dict],
+) -> None:
+    """
+    Migrate non-default locale variants for dynamic content items.
+
+    Each variant record was augmented by the extractor with `item_id`
+    (source). We resolve that to the target item ID via
+    id_map["dynamic_content_items"], then POST the variant.
+
+    Conflict handling: if a variant for the locale already exists on the
+    target item (422), we PUT (update) it instead.
+
+    Note: locale_id values are Zendesk-global integers (e.g. 1 = English,
+    16 = French) and do not need remapping — they are the same across accounts.
+    """
+    if not source_variants:
+        logger.info("  No dynamic content variants to migrate.")
+        return
+
+    item_map = id_map.get("dynamic_content_items", {})
+    if not isinstance(item_map, dict):
+        logger.warn(
+            "dynamic_content_variants: dynamic_content_items map missing — "
+            "cannot migrate variants."
+        )
+        return
+
+    STRIP = frozenset({"id", "url", "created_at", "updated_at", "item_id",
+                       "outdated", "default"})
+
+    created = updated = skipped = failed = 0
+    for v in source_variants:
+        if not isinstance(v, dict):
+            continue
+        src_item_id = v.get("item_id")
+        locale_id = v.get("locale_id")
+        tgt_item_id = item_map.get(str(src_item_id)) if src_item_id else None
+        if not tgt_item_id:
+            skipped += 1
+            continue
+
+        payload = {k: val for k, val in v.items() if k not in STRIP}
+        if not payload:
+            skipped += 1
+            continue
+
+        try:
+            resp = target.post(
+                f"dynamic_content/items/{tgt_item_id}/variants",
+                {"variant": payload},
+            )
+            if resp.get("dry_run"):
+                skipped += 1
+                continue
+            new_v = resp.get("variant") or {}
+            if new_v.get("id"):
+                logger.log_created(
+                    "dynamic_content_variants",
+                    v.get("id"),
+                    new_v["id"],
+                    f"item={tgt_item_id} locale={locale_id}",
+                )
+                created += 1
+            else:
+                logger.log_failed(
+                    "dynamic_content_variants", v.get("id"),
+                    "Create response had no 'id' field.",
+                    f"item={tgt_item_id} locale={locale_id}",
+                )
+                failed += 1
+        except ZendeskAPIError as exc:
+            if exc.status_code == 422:
+                # Variant already exists — update it
+                try:
+                    resp = target.put(
+                        f"dynamic_content/items/{tgt_item_id}/variants/{locale_id}",
+                        {"variant": payload},
+                    )
+                    if resp.get("dry_run"):
+                        skipped += 1
+                        continue
+                    logger.log_created(
+                        "dynamic_content_variants",
+                        v.get("id"),
+                        tgt_item_id,
+                        f"item={tgt_item_id} locale={locale_id} (updated)",
+                    )
+                    updated += 1
+                except (ZendeskAPIError, ZendeskNetworkError) as upd_exc:
+                    logger.log_failed(
+                        "dynamic_content_variants", v.get("id"),
+                        f"Update failed: {upd_exc}",
+                        f"item={tgt_item_id} locale={locale_id}",
+                    )
+                    failed += 1
+            else:
+                logger.log_failed(
+                    "dynamic_content_variants", v.get("id"),
+                    str(exc),
+                    f"item={tgt_item_id} locale={locale_id}",
+                )
+                failed += 1
+        except (ZendeskNetworkError, Exception) as exc:
+            logger.log_failed(
+                "dynamic_content_variants", v.get("id"),
+                f"Unexpected error: {type(exc).__name__}: {exc}",
+                f"item={tgt_item_id} locale={locale_id}",
+            )
+            failed += 1
+
+    logger.success(
+        f"Dynamic content variants: {created} created, {updated} updated, "
+        f"{failed} failed, {skipped} skipped."
+    )

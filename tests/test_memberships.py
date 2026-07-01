@@ -27,7 +27,7 @@ def _fresh(tmp: Path) -> None:
 
 
 class FakeClient:
-    """Minimal stand-in for ZendeskClient covering post/list_resource."""
+    """Minimal stand-in for ZendeskClient covering post/list_resource/get_all."""
 
     def __init__(self, existing=None, fail_paths=None):
         self.dry_run = False
@@ -38,6 +38,10 @@ class FakeClient:
 
     def list_resource(self, path, rkey):
         return self._existing.get(path, [])
+
+    def get_all(self, path, rkey):
+        """Streaming equivalent — yields items from the same backing dict."""
+        yield from self._existing.get(path, [])
 
     def post(self, path, payload):
         self.posts.append((path, payload))

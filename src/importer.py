@@ -235,6 +235,7 @@ def import_resource(
     conflict_mode: str = "skip",
     update_path_fn: Optional[Callable[[Any], str]] = None,
     max_workers: int = 6,
+    strip_custom_role: bool = True,
 ) -> None:
     """
     Generic import loop for a single resource type.
@@ -299,7 +300,7 @@ def import_resource(
                 continue
 
         try:
-            payload = strip_source_fields(item)
+            payload = strip_source_fields(item, strip_custom_role=strip_custom_role)
         except Exception as exc:
             logger.log_failed(resource_key, source_id,
                               f"strip_source_fields failed: {exc}", item_name)
@@ -401,6 +402,18 @@ def import_resource(
                     continue
 
             if conflict_mode == "replace":
+                # Fix P1-N: validate the payload is non-empty before deleting
+                # the existing target resource. If the payload is empty (all
+                # fields stripped/remapped away), the create that follows will
+                # 422 and the resource will be permanently gone from the target.
+                if not payload:
+                    logger.log_failed(
+                        resource_key, source_id,
+                        f"Skipping replace — payload is empty after strip/remap. "
+                        f"Existing target resource (id={conflict_id}) preserved.",
+                        item_name,
+                    )
+                    continue
                 try:
                     delete_path = delete_path_fn(conflict_id)
                     client.delete(delete_path)

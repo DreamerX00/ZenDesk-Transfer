@@ -44,6 +44,21 @@ def run(source: ZendeskClient, target: ZendeskClient,
         exports: Dict[str, List[Dict]]) -> Dict:
     id_map = load_id_map()
 
+    # ---- 4.1.5  Permission Groups (needed by articles/sections) ------- #
+    # HC permission groups control who can edit articles and sections.
+    # Must be migrated before articles so permission_group_id can be remapped.
+    logger.section("4.1.5  Help Center Permission Groups")
+    _import_hc_resource(
+        client=target, id_map=id_map,
+        source_items=exports.get("permission_groups", []),
+        resource_key="hc_permission_groups",
+        create_path="guide/permission_groups",
+        create_rkey="permission_group",
+        delete_path_fn=lambda tid: f"guide/permission_groups/{tid}",
+        list_path="guide/permission_groups",
+        list_rkey="permission_groups",
+    )
+
     # ---- 4.1.6  User Segments (needed by sections) ------------------- #
     logger.section("4.1.6  Help Center User Segments")
     _import_user_segments(target, id_map, exports.get("user_segments", []))
@@ -61,6 +76,10 @@ def run(source: ZendeskClient, target: ZendeskClient,
         list_rkey="categories",
     )
 
+    # Restore category ordering — Zendesk ignores position on create.
+    logger.section("4.1.1b  Help Center Category Ordering")
+    _restore_category_positions(target, id_map, exports.get("categories", []))
+
     # ---- 4.1.2  Sections --------------------------------------------- #
     logger.section("4.1.2  Help Center Sections")
     _import_hc_resource(
@@ -75,9 +94,23 @@ def run(source: ZendeskClient, target: ZendeskClient,
         create_path_fn=lambda p: f"help_center/categories/{p.get('category_id', '')}/sections",
     )
 
+    # Fix P3-R: Zendesk ignores `position` on section create and uses
+    # insertion order. After all sections exist, PUT their positions so the
+    # HC navigation order matches the source.
+    logger.section("4.1.2b  Help Center Section Ordering")
+    _restore_section_positions(target, id_map, exports.get("sections", []))
+
     # ---- 4.1.3  Articles --------------------------------------------- #
     logger.section("4.1.3  Help Center Articles (with labels & attachments)")
     _import_articles(source, target, id_map, exports.get("articles", []))
+
+    # ---- 4.1.4  Article Translations --------------------------------- #
+    # Non-default-locale translations are migrated after all articles exist
+    # so the target article IDs are in id_map["hc_articles"].
+    logger.section("4.1.4  Help Center Article Translations")
+    _migrate_article_translations(
+        target, id_map, exports.get("article_translations", [])
+    )
 
     # ---- 4.1.7  Help Center Theme ------------------------------------- #
     logger.section("4.1.7  Help Center Theme (portal UI)")
@@ -123,7 +156,7 @@ def _import_hc_resource(
         name = item.get("name") or f"<unnamed id={source_id}>"
 
         try:
-            payload = strip_source_fields(item)
+            payload = strip_source_fields(item, strip_custom_role=True)
             payload = remap_payload(payload, id_map, context=f"{resource_key}:{name}")
         except RemapError as exc:
             logger.log_failed(resource_key, source_id, str(exc), name)
@@ -135,7 +168,24 @@ def _import_hc_resource(
             )
             continue
 
-        # PURGE conflict
+        # Fix P1-P: validate the create path BEFORE purging the conflict.
+        # If category_id is missing, the section would be deleted but never
+        # recreated. Fail early so the existing target resource is preserved.
+        if create_path_fn:
+            cat_id = payload.get("category_id")
+            if not cat_id:
+                logger.log_failed(
+                    resource_key, source_id,
+                    "No category_id in remapped payload — cannot determine "
+                    "category-specific create path. Skipping purge to preserve "
+                    "existing target resource.", name,
+                )
+                continue
+            effective_create_path = create_path_fn(payload)
+        else:
+            effective_create_path = create_path
+
+        # PURGE conflict (only after we know the create path is valid)
         if name in existing_by_name:
             conflict_id = existing_by_name[name].get("id")
             if conflict_id is None:
@@ -152,19 +202,6 @@ def _import_hc_resource(
                         resource_key, source_id, f"Purge failed: {exc}", name
                     )
                     continue
-
-        if create_path_fn:
-            cat_id = payload.get("category_id")
-            if not cat_id:
-                logger.log_failed(
-                    resource_key, source_id,
-                    "No category_id in remapped payload — cannot determine "
-                    "category-specific create path.", name,
-                )
-                continue
-            effective_create_path = create_path_fn(payload)
-        else:
-            effective_create_path = create_path
 
         try:
             resp = client.post(effective_create_path, {create_rkey: payload})
@@ -195,6 +232,130 @@ def _import_hc_resource(
                 resource_key, source_id,
                 f"Unexpected error during create: {type(exc).__name__}: {exc}", name,
             )
+
+
+def _restore_category_positions(
+    target: ZendeskClient,
+    id_map: Dict,
+    source_categories: List[Dict],
+) -> None:
+    """
+    Restore HC category `position` ordering after all categories are created.
+    Zendesk ignores `position` on category create and uses insertion order.
+    """
+    cat_map = id_map.get("hc_categories", {})
+    if not isinstance(cat_map, dict) or not source_categories:
+        return
+
+    updated = skipped = failed = 0
+    for cat in source_categories:
+        if not isinstance(cat, dict):
+            continue
+        src_id = cat.get("id")
+        position = cat.get("position")
+        if position is None:
+            continue
+        tgt_id = cat_map.get(str(src_id))
+        if not tgt_id:
+            skipped += 1
+            continue
+        try:
+            resp = target.put(
+                f"help_center/categories/{tgt_id}",
+                {"category": {"position": int(position)}},
+            )
+            if isinstance(resp, dict) and resp.get("dry_run"):
+                skipped += 1
+                continue
+            updated += 1
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.log_failed(
+                "hc_category_position", src_id,
+                f"Failed to set position={position}: {exc}",
+                cat.get("name", ""),
+            )
+            failed += 1
+        except Exception as exc:
+            logger.log_failed(
+                "hc_category_position", src_id,
+                f"Unexpected error: {type(exc).__name__}: {exc}",
+                cat.get("name", ""),
+            )
+            failed += 1
+
+    if updated or failed:
+        logger.success(
+            f"Category positions: {updated} updated, {failed} failed, "
+            f"{skipped} skipped."
+        )
+    else:
+        logger.info("  No category positions to restore.")
+
+
+def _restore_section_positions(
+    target: ZendeskClient,
+    id_map: Dict,
+    source_sections: List[Dict],
+) -> None:
+    """
+    Fix P3-R: Restore section `position` ordering after all sections are created.
+
+    Zendesk ignores the `position` field on section create and assigns positions
+    by insertion order. After all sections exist on the target, we PUT each
+    section's position so the HC navigation order matches the source.
+
+    Only sections that have an explicit `position` value and were successfully
+    migrated (present in id_map["hc_sections"]) are updated.
+    """
+    section_map = id_map.get("hc_sections", {})
+    if not isinstance(section_map, dict) or not source_sections:
+        return
+
+    updated = skipped = failed = 0
+    for sec in source_sections:
+        if not isinstance(sec, dict):
+            continue
+        src_id = sec.get("id")
+        position = sec.get("position")
+        if position is None:
+            continue  # no position to restore
+
+        tgt_id = section_map.get(str(src_id))
+        if not tgt_id:
+            skipped += 1
+            continue
+
+        try:
+            resp = target.put(
+                f"help_center/sections/{tgt_id}",
+                {"section": {"position": int(position)}},
+            )
+            if isinstance(resp, dict) and resp.get("dry_run"):
+                skipped += 1
+                continue
+            updated += 1
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.log_failed(
+                "hc_section_position", src_id,
+                f"Failed to set position={position}: {exc}",
+                sec.get("name", ""),
+            )
+            failed += 1
+        except Exception as exc:
+            logger.log_failed(
+                "hc_section_position", src_id,
+                f"Unexpected error: {type(exc).__name__}: {exc}",
+                sec.get("name", ""),
+            )
+            failed += 1
+
+    if updated or failed:
+        logger.success(
+            f"Section positions: {updated} updated, {failed} failed, "
+            f"{skipped} skipped."
+        )
+    else:
+        logger.info("  No section positions to restore.")
 
 
 def _import_user_segments(target: ZendeskClient, id_map: Dict,
@@ -254,14 +415,21 @@ def _import_articles(source: ZendeskClient, target: ZendeskClient,
             continue
 
         try:
-            payload = strip_source_fields(article)
+            payload = strip_source_fields(article, strip_custom_role=True)
         except Exception as exc:
             logger.log_failed("hc_articles", source_id,
                               f"strip_source_fields failed: {exc}", title)
             continue
 
         payload["section_id"] = int(target_section_id)
-        payload.pop("author_id", None)  # use admin as fallback author
+        payload.pop("author_id", None)  # use admin as fallback author; reassigned in Phase 5
+
+        # Preserve draft state: if the source article was NOT a draft, ensure
+        # the target article is published. Zendesk creates articles as drafts
+        # by default when `draft` is omitted, so we must be explicit.
+        # If the source was a draft, pass draft=True so it stays unpublished.
+        source_draft = article.get("draft", False)
+        payload["draft"] = bool(source_draft)
 
         # PURGE conflict
         if title in existing_by_title:
@@ -494,6 +662,133 @@ def _migrate_attachments(source: ZendeskClient, target: ZendeskClient,
                 f"Unexpected error: {type(exc).__name__}: {exc}",
                 f"{article_title}/{safe_name}",
             )
+
+
+def _migrate_article_translations(
+    target: ZendeskClient,
+    id_map: Dict,
+    translations: List[Dict],
+) -> None:
+    """
+    Migrate non-default-locale article translations to the target.
+
+    Each translation record was augmented by the extractor with `article_id`
+    (the source article ID). We resolve that to the target article ID via
+    id_map["hc_articles"], then POST the translation.
+
+    Conflict handling: if a translation for the locale already exists on the
+    target article, we PUT (update) it instead of creating a duplicate.
+    """
+    if not translations:
+        logger.info("  No article translations to migrate.")
+        return
+
+    article_map = id_map.get("hc_articles", {})
+    if not isinstance(article_map, dict):
+        logger.warn(
+            "article_translations: hc_articles map missing — "
+            "cannot migrate translations."
+        )
+        return
+
+    created = updated = skipped = failed = 0
+    for t in translations:
+        if not isinstance(t, dict):
+            continue
+        src_article_id = t.get("article_id")
+        locale = t.get("locale", "")
+        title = t.get("title", f"<untitled locale={locale}>")
+
+        tgt_article_id = article_map.get(str(src_article_id))
+        if not tgt_article_id:
+            logger.log_skipped(
+                "article_translations",
+                f"{src_article_id}/{locale}",
+                f"Source article {src_article_id} was not migrated",
+            )
+            skipped += 1
+            continue
+
+        # Build payload — strip server-managed fields
+        payload = {
+            k: v for k, v in t.items()
+            if k not in {"id", "url", "html_url", "source_url", "created_at",
+                         "updated_at", "article_id", "outdated"}
+        }
+
+        try:
+            # Try to create; if 422 (already exists), fall back to PUT
+            resp = target.post(
+                f"help_center/articles/{tgt_article_id}/translations",
+                {"translation": payload},
+            )
+            if resp.get("dry_run"):
+                skipped += 1
+                continue
+            new_t = resp.get("translation") or {}
+            if new_t.get("id"):
+                logger.log_created(
+                    "article_translations",
+                    f"{src_article_id}/{locale}",
+                    new_t["id"],
+                    f"{title} [{locale}]",
+                )
+                created += 1
+            else:
+                logger.log_failed(
+                    "article_translations",
+                    f"{src_article_id}/{locale}",
+                    "Create response had no 'id' field.",
+                    f"{title} [{locale}]",
+                )
+                failed += 1
+        except ZendeskAPIError as exc:
+            if exc.status_code == 422:
+                # Translation already exists — update it
+                try:
+                    resp = target.put(
+                        f"help_center/articles/{tgt_article_id}/translations/{locale}",
+                        {"translation": payload},
+                    )
+                    if resp.get("dry_run"):
+                        skipped += 1
+                        continue
+                    logger.log_created(
+                        "article_translations",
+                        f"{src_article_id}/{locale}",
+                        tgt_article_id,
+                        f"{title} [{locale}] (updated)",
+                    )
+                    updated += 1
+                except (ZendeskAPIError, ZendeskNetworkError) as upd_exc:
+                    logger.log_failed(
+                        "article_translations",
+                        f"{src_article_id}/{locale}",
+                        f"Update failed: {upd_exc}",
+                        f"{title} [{locale}]",
+                    )
+                    failed += 1
+            else:
+                logger.log_failed(
+                    "article_translations",
+                    f"{src_article_id}/{locale}",
+                    str(exc),
+                    f"{title} [{locale}]",
+                )
+                failed += 1
+        except (ZendeskNetworkError, Exception) as exc:
+            logger.log_failed(
+                "article_translations",
+                f"{src_article_id}/{locale}",
+                f"Unexpected error: {type(exc).__name__}: {exc}",
+                f"{title} [{locale}]",
+            )
+            failed += 1
+
+    logger.success(
+        f"Article translations: {created} created, {updated} updated, "
+        f"{failed} failed, {skipped} skipped."
+    )
 
 
 def _migrate_article_labels(

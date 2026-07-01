@@ -260,7 +260,7 @@ def _import_organizations_batched(
             continue
 
         try:
-            payload = strip_source_fields(item)
+            payload = strip_source_fields(item, strip_custom_role=True)
             # Organization custom-field VALUES are keyed by the field's stable
             # `key` string, and the org field definitions were migrated in
             # Phase 1 (section 2.5) with name_field="key", so the keys line up

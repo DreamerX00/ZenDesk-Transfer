@@ -254,8 +254,8 @@ def restore(client: ZendeskClient, backup_dir: Path) -> int:
                 logger.log_skipped(resource_key, item_id, "Default automation — replaced by Zendesk on create")
                 continue
 
-            # Strip server-managed fields
-            payload = strip_source_fields(item)
+            # Strip server-managed fields (backup/restore never needs custom_role_id remapped)
+            payload = strip_source_fields(item, strip_custom_role=True)
 
             # Pre-process specific resource types
             if resource_key == "groups" and item.get("default"):

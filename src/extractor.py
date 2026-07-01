@@ -40,24 +40,38 @@ RESOURCES = [
     ("group_sla_policies",    "group_slas/policies",             "group_sla_policies.json"),
     ("schedules",             "business_hours/schedules",        "schedules.json"),
     ("routing_attributes",    "routing/attributes",              "routing_attributes.json"),
+    # Custom ticket statuses (Enterprise/Suite) — referenced by trigger/automation conditions.
+    # Plan-gated: silently skipped on plans that don't support them.
+    ("custom_statuses",       "custom_statuses",                 "custom_statuses.json"),
     ("dynamic_content_items", "dynamic_content/items",           "dynamic_content.json"),
     ("webhooks",              "webhooks",                        "webhooks.json"),
     # Help Center
     ("categories",            "help_center/categories",          "hc_categories.json"),
     ("sections",              "help_center/sections",            "hc_sections.json"),
     ("articles",              "help_center/articles",            "hc_articles.json"),
+    # Article translations are fetched per-article in a dedicated step after
+    # the article list is extracted (see _export_article_translations).
     ("user_segments",         "help_center/user_segments",       "hc_user_segments.json"),
+    # HC permission groups control who can edit articles/sections.
+    # Must be extracted before articles so permission_group_id can be remapped.
+    ("permission_groups",     "guide/permission_groups",         "hc_permission_groups.json"),
     # Users
     ("users",                 "users",                           "users.json"),
     # Membership links (created in Phase 5, after users exist)
     ("group_memberships",        "group_memberships",            "group_memberships.json"),
     ("organization_memberships", "organization_memberships",     "organization_memberships.json"),
+    # User identities (secondary emails, Twitter, etc.) — fetched per-user
+    # in a dedicated step after the user list is extracted.
+    # (see _export_user_identities)
     # Help Center Themes (JSON metadata only; ZIP is exported separately)
     ("themes",                "guide/theming/themes",            "hc_themes.json"),
 ]
 
 # Resources to skip silently if the account plan doesn't support them
-PLAN_GATED = {"custom_roles", "group_sla_policies", "routing_attributes"}
+PLAN_GATED = {
+    "custom_roles", "group_sla_policies", "routing_attributes",
+    "permission_groups", "custom_statuses",
+}
 
 
 def extract_all(client: ZendeskClient) -> Dict[str, List[Dict]]:
@@ -98,6 +112,22 @@ def extract_all(client: ZendeskClient) -> Dict[str, List[Dict]]:
             )
             result[resource_key] = []
 
+    # Export routing attribute values (skills) — nested under each attribute.
+    # Only attempted when routing_attributes were successfully extracted.
+    _export_routing_attribute_values(client, result)
+
+    # Export article translations — nested under each article.
+    # Only attempted when articles were successfully extracted.
+    _export_article_translations(client, result)
+
+    # Export user identities (secondary emails, social logins) — nested per user.
+    # Only attempted when users were successfully extracted.
+    _export_user_identities(client, result)
+
+    # Export dynamic content locale variants — nested under each item.
+    # Only attempted when dynamic_content_items were successfully extracted.
+    _export_dynamic_content_variants(client, result)
+
     # Export the live help center theme as a ZIP file
     _export_live_theme(client, result)
 
@@ -128,6 +158,226 @@ def load_export(filename: str) -> List[Dict]:
     except OSError as exc:
         logger.warn(f"Could not read export file '{filename}': {exc}")
         return []
+
+
+def _export_article_translations(
+    client: "ZendeskClient",
+    result: Dict[str, List[Dict]],
+) -> None:
+    """
+    Export all non-default-locale translations for each Help Center article.
+
+    The default locale translation is the article body itself (already in the
+    article record). Additional translations live at:
+        GET /help_center/articles/{id}/translations
+
+    Each translation record is augmented with `article_id` so the Phase 3
+    importer can POST it to the correct target article.
+    """
+    articles = result.get("articles", [])
+    if not articles:
+        return
+
+    all_translations: List[Dict] = []
+    for article in articles:
+        article_id = article.get("id")
+        if article_id is None:
+            continue
+        default_locale = article.get("locale", "")
+        try:
+            translations = list(client.get_all(
+                f"help_center/articles/{article_id}/translations",
+                "translations",
+            ))
+            for t in translations:
+                if not isinstance(t, dict):
+                    continue
+                # Skip the default locale — it's already in the article body
+                if t.get("locale", "") == default_locale:
+                    continue
+                t["article_id"] = article_id
+                all_translations.append(t)
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.warn(
+                f"Could not fetch translations for article {article_id}: {exc}"
+            )
+        except Exception as exc:
+            logger.warn(
+                f"Unexpected error fetching translations for article {article_id}: {exc}"
+            )
+
+    result["article_translations"] = all_translations
+    if all_translations:
+        _save("article_translations.json", all_translations)
+        logger.info(f"  Exported {len(all_translations):>4}  article_translations")
+
+
+def _export_dynamic_content_variants(
+    client: "ZendeskClient",
+    result: Dict[str, List[Dict]],
+) -> None:
+    """
+    Export all non-default locale variants for each dynamic content item.
+
+    Zendesk stores locale variants at /dynamic_content/items/{id}/variants.
+    The default locale variant is already embedded in the item record itself.
+    We export only non-default variants so Phase 2 can recreate them on the
+    target item after the item is created.
+
+    Each variant record is augmented with `item_id` (source) so the importer
+    can POST it under the correct target item.
+    """
+    items = result.get("dynamic_content_items", [])
+    if not items:
+        return
+
+    all_variants: List[Dict] = []
+    for item in items:
+        item_id = item.get("id")
+        if item_id is None:
+            continue
+        default_locale_id = item.get("default_locale_id")
+        try:
+            variants = list(client.get_all(
+                f"dynamic_content/items/{item_id}/variants", "variants"
+            ))
+            for v in variants:
+                if not isinstance(v, dict):
+                    continue
+                # Skip the default locale — it's already in the item record
+                if v.get("locale_id") == default_locale_id:
+                    continue
+                v["item_id"] = item_id
+                all_variants.append(v)
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.warn(
+                f"Could not fetch variants for dynamic content item {item_id}: {exc}"
+            )
+        except Exception as exc:
+            logger.warn(
+                f"Unexpected error fetching variants for DC item {item_id}: {exc}"
+            )
+
+    result["dynamic_content_variants"] = all_variants
+    if all_variants:
+        _save("dynamic_content_variants.json", all_variants)
+        logger.info(f"  Exported {len(all_variants):>4}  dynamic_content_variants")
+
+
+def _export_user_identities(
+    client: "ZendeskClient",
+    result: Dict[str, List[Dict]],
+) -> None:
+    """
+    Export all non-primary user identities (secondary emails, Twitter/X,
+    phone, Google, etc.) for each user.
+
+    Zendesk stores identities at /users/{id}/identities. The primary identity
+    (the login email) is already on the user record itself. We export only
+    non-primary identities so Phase 5 can recreate them on the target user
+    after the user is created.
+
+    Each identity record is augmented with `user_id` (source) so the Phase 5
+    importer can POST it under the correct target user.
+
+    We skip identities of type 'email' that are marked primary=True (already
+    on the user record) and identities of type 'twitter'/'facebook' that
+    require OAuth re-authorization by the user — those are flagged as MANUAL.
+    """
+    users = result.get("users", [])
+    if not users:
+        return
+
+    OAUTH_TYPES = frozenset({"twitter", "facebook", "google"})
+    all_identities: List[Dict] = []
+    manual_count = 0
+
+    for user in users:
+        user_id = user.get("id")
+        if user_id is None or user_id == 1:
+            continue
+        try:
+            identities = list(client.get_all(
+                f"users/{user_id}/identities", "identities"
+            ))
+            for ident in identities:
+                if not isinstance(ident, dict):
+                    continue
+                # Skip the primary email — it's already on the user record
+                if ident.get("primary") and ident.get("type") == "email":
+                    continue
+                # OAuth-backed identities can't be migrated — flag as MANUAL
+                if ident.get("type") in OAUTH_TYPES:
+                    manual_count += 1
+                    continue
+                ident["user_id"] = user_id
+                all_identities.append(ident)
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.warn(
+                f"Could not fetch identities for user {user_id}: {exc}"
+            )
+        except Exception as exc:
+            logger.warn(
+                f"Unexpected error fetching identities for user {user_id}: {exc}"
+            )
+
+    result["user_identities"] = all_identities
+    if all_identities:
+        _save("user_identities.json", all_identities)
+        logger.info(f"  Exported {len(all_identities):>4}  user_identities")
+    if manual_count:
+        logger.warn(
+            f"  {manual_count} OAuth-backed user identities (Twitter/Facebook/Google) "
+            "cannot be migrated — users must re-link them manually."
+        )
+
+
+def _export_routing_attribute_values(
+    client: "ZendeskClient",
+    result: Dict[str, List[Dict]],
+) -> None:
+    """
+    Export the skill option values for each routing attribute.
+
+    Zendesk stores routing attribute values (the discrete skill options, e.g.
+    "Spanish", "Billing") at /routing/attributes/{id}/values — a sub-resource
+    that is not returned by the top-level /routing/attributes list. Without
+    these, agents on the target have no skills to assign even after the
+    attribute definitions are migrated.
+
+    Each value record is augmented with its parent `attribute_id` so the
+    Phase 2 importer can create them under the correct target attribute.
+    """
+    attributes = result.get("routing_attributes", [])
+    if not attributes:
+        return
+
+    all_values: List[Dict] = []
+    for attr in attributes:
+        attr_id = attr.get("id")
+        if attr_id is None:
+            continue
+        try:
+            values = list(client.get_all(
+                f"routing/attributes/{attr_id}/values", "attribute_values"
+            ))
+            for v in values:
+                if isinstance(v, dict):
+                    v["attribute_id"] = attr_id  # stash parent for importer
+                    all_values.append(v)
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.warn(
+                f"Could not fetch values for routing attribute {attr_id}: {exc}"
+            )
+        except Exception as exc:
+            logger.warn(
+                f"Unexpected error fetching routing attribute {attr_id} values: {exc}"
+            )
+
+    result["routing_attribute_values"] = all_values
+    if all_values:
+        _save("routing_attribute_values.json", all_values)
+        logger.info(f"  Exported {len(all_values):>4}  routing_attribute_values")
 
 
 def _export_live_theme(

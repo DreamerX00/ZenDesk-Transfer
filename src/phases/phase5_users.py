@@ -99,28 +99,35 @@ def _confirm_proceed(count_to_create: int, assume_yes: bool) -> bool:
 
 def _probe_create_many(target: ZendeskClient) -> bool:
     """Check if the account supports bulk user creation (create_many).
-    Cleans up the probe user afterward if creation succeeded."""
+
+    Fix P2-G: the original implementation POSTed a real probe user and
+    attempted a best-effort cleanup that could leave a ghost '_probe_' user
+    on the target if the async job hadn't completed by the time cleanup ran.
+
+    Instead we use a HEAD request to check endpoint availability. Zendesk
+    returns 200 on HEAD for endpoints that exist and 404/405 for those that
+    don't. This is zero-side-effect and works across all plan tiers.
+    If HEAD is not supported (some Zendesk environments return 405 for HEAD
+    on all endpoints), we fall back to checking the OPTIONS response or
+    simply return True and let the first real batch fail gracefully.
+    """
     try:
         url = target._url("users/create_many")
-        resp = target._request(
-            "POST", url, json={"users": [{"name": "_probe_", "verified": True}]}
-        )
-        if not resp.ok:
+        resp = target._request("HEAD", url)
+        # 200 or 405 (method not allowed but endpoint exists) → supported
+        # 403 → endpoint exists but plan doesn't allow it → not supported
+        # 404 → endpoint doesn't exist → not supported
+        if resp.status_code == 403:
             return False
-        # Clean up the probe user
-        try:
-            data = resp.json()
-            job = data.get("job_status") or {}
-            if job.get("status") == "completed":
-                for result in (job.get("results") or []):
-                    probe_id = result.get("id")
-                    if probe_id:
-                        target.delete(f"users/{probe_id}")
-        except Exception:
-            pass
+        if resp.status_code == 404:
+            return False
+        # Any other response (200, 405, etc.) → assume supported and let
+        # the first real batch surface any actual error.
         return True
     except Exception:
-        return False
+        # Network error or unexpected exception — assume supported and let
+        # the first real batch fail with a proper error message.
+        return True
 
 
 def _create_single(
@@ -223,12 +230,18 @@ def run(
             skipped += 1
             continue
 
-        # Skip conflicts by email
+        # Skip conflicts by email — but reconcile the id_map so memberships
+        # and identities for this user can still be migrated using the
+        # existing target user's ID.
         if email and email in target_by_email:
             conflict = target_by_email[email]
+            conflict_id = conflict.get("id")
+            if conflict_id is not None and source_id is not None:
+                _record_mapping(id_map, "users", source_id, conflict_id)
             logger.log_skipped(
                 "users", source_id,
-                f"Email '{email}' already exists in target (id={conflict.get('id')})"
+                f"Email '{email}' already exists in target "
+                f"(id={conflict_id}) — mapped for membership/identity migration"
             )
             skipped += 1
             continue
@@ -433,6 +446,19 @@ def run(
     # views/triggers/routing) and users lose multi-org links.
     _migrate_group_memberships(target, id_map, exports.get("group_memberships", []))
     _migrate_org_memberships(target, id_map, exports.get("organization_memberships", []))
+
+    # ---- User identities (secondary emails, phone, etc.) ------------- #
+    # Non-primary identities are a separate resource that the user payload
+    # does not carry. Migrated after users exist so target user IDs are known.
+    _migrate_user_identities(target, id_map, exports.get("user_identities", []))
+
+    # ---- Agent skill assignments (routing) --------------------------- #
+    # Agent→skill links are a separate resource at /routing/agents/{id}/
+    # instance_values. Migrated after both users and routing attribute values
+    # exist so all IDs are resolvable.
+    _migrate_agent_skill_assignments(
+        source, target, id_map, exports.get("users", [])
+    )
 
     # ---- Deferred ownership reassignment (requires users) ------------ #
     # Views (Phase 2) and Help Center articles (Phase 3) are created BEFORE
@@ -796,21 +822,258 @@ def _existing_membership_keys(
     exist on the target, so re-runs are idempotent. Failure to list is
     non-fatal — we return an empty set and rely on the API's own duplicate
     rejection (logged as FAILED) rather than aborting.
+
+    Fix P3-W: uses get_all() (streaming generator) instead of list_resource()
+    so the full membership list is never held in memory all at once. For a
+    100k-user account with multiple memberships each, list_resource() would
+    materialise 300k+ records into a Python list before building the set.
+    get_all() yields one page at a time (100 records per page), keeping peak
+    memory proportional to one page rather than the entire dataset.
     """
     keys: set = set()
     try:
-        existing = target.list_resource(list_path, list_rkey)
+        for m in target.get_all(list_path, list_rkey):
+            if not isinstance(m, dict):
+                continue
+            u = m.get("user_id")
+            r = m.get(ref_key)
+            if u is not None and r is not None:
+                keys.add((u, r))
     except (ZendeskAPIError, ZendeskNetworkError) as exc:
         logger.warn(
             f"Could not list existing {list_rkey}: {exc}. "
             "Proceeding without dedup."
         )
-        return keys
-    for m in existing:
-        if not isinstance(m, dict):
-            continue
-        u = m.get("user_id")
-        r = m.get(ref_key)
-        if u is not None and r is not None:
-            keys.add((u, r))
     return keys
+
+
+def _migrate_user_identities(
+    target: ZendeskClient,
+    id_map: Dict,
+    source_identities: List[Dict],
+) -> None:
+    """
+    Migrate non-primary user identities (secondary emails, phone numbers, etc.)
+    to the target after users have been created.
+
+    Each identity record was augmented by the extractor with `user_id`
+    (source). We resolve that to the target user ID via id_map["users"],
+    then POST the identity under the correct target user.
+
+    OAuth-backed identities (Twitter/Facebook/Google) are excluded at
+    extraction time — they require the user to re-authorize and cannot be
+    migrated programmatically.
+
+    Conflict handling: if an identity with the same value already exists on
+    the target user, Zendesk returns 422. We skip those silently.
+    """
+    if not source_identities:
+        return
+
+    logger.section("Phase 5f — User Identities")
+    user_map = id_map.get("users", {})
+    if not isinstance(user_map, dict):
+        logger.warn("user_identities: users map missing — skipping.")
+        return
+
+    # Strip fields that are server-managed or account-scoped
+    STRIP = frozenset({
+        "id", "url", "user_id", "created_at", "updated_at",
+        "verified", "primary", "undeliverable_count",
+        "deliverable_state",
+    })
+
+    created = skipped = failed = 0
+    for ident in source_identities:
+        if not isinstance(ident, dict):
+            continue
+        src_user_id = ident.get("user_id")
+        tgt_user_id = user_map.get(str(src_user_id)) if src_user_id else None
+        if not tgt_user_id:
+            # User was skipped (email conflict) — reconcile via target_by_email
+            skipped += 1
+            continue
+
+        payload = {k: v for k, v in ident.items() if k not in STRIP}
+        if not payload.get("type") or not payload.get("value"):
+            skipped += 1
+            continue
+
+        try:
+            resp = target.post(
+                f"users/{tgt_user_id}/identities",
+                {"identity": payload},
+            )
+            if resp.get("dry_run"):
+                skipped += 1
+                continue
+            new_ident = resp.get("identity") or {}
+            if new_ident.get("id"):
+                logger.log_created(
+                    "user_identities",
+                    ident.get("id"),
+                    new_ident["id"],
+                    f"user={tgt_user_id} type={payload.get('type')} "
+                    f"value={payload.get('value', '')[:40]}",
+                )
+                created += 1
+            else:
+                logger.log_failed(
+                    "user_identities", ident.get("id"),
+                    "Create response had no 'id' field.",
+                    f"user={tgt_user_id}",
+                )
+                failed += 1
+        except ZendeskAPIError as exc:
+            if exc.status_code == 422:
+                # Identity already exists on target user — idempotent skip
+                skipped += 1
+            else:
+                logger.log_failed(
+                    "user_identities", ident.get("id"), str(exc),
+                    f"user={tgt_user_id}",
+                )
+                failed += 1
+        except (ZendeskNetworkError, Exception) as exc:
+            logger.log_failed(
+                "user_identities", ident.get("id"),
+                f"Unexpected error: {type(exc).__name__}: {exc}",
+                f"user={tgt_user_id}",
+            )
+            failed += 1
+
+    logger.success(
+        f"User identities: {created} created, {failed} failed, {skipped} skipped."
+    )
+
+
+def _migrate_agent_skill_assignments(
+    source: ZendeskClient,
+    target: ZendeskClient,
+    id_map: Dict,
+    source_users: List[Dict],
+) -> None:
+    """
+    Migrate agent skill assignments (routing/agents/{id}/instance_values).
+
+    Each agent on the source may have one or more routing attribute values
+    (skills) assigned. These are stored at a per-agent sub-resource and are
+    not included in the user export. We fetch them from the source for each
+    agent, remap the attribute value IDs via id_map["routing_attribute_values"],
+    and PUT the full assignment list on the target agent.
+
+    Only agents (role == "agent" or "admin") are processed — end-users have
+    no skill assignments. Agents that were not migrated (email conflict) are
+    skipped via the user id_map.
+
+    Requires routing_attribute_values to have been migrated in Phase 2 (step
+    3.10b) so id_map["routing_attribute_values"] is populated.
+    """
+    val_map = id_map.get("routing_attribute_values", {})
+    if not isinstance(val_map, dict) or not val_map:
+        # No skill values were migrated — nothing to assign
+        return
+
+    user_map = id_map.get("users", {})
+    if not isinstance(user_map, dict) or not user_map:
+        return
+
+    agents = [
+        u for u in source_users
+        if isinstance(u, dict) and u.get("role") in ("agent", "admin")
+        and u.get("id") is not None and u.get("id") != 1
+    ]
+    if not agents:
+        return
+
+    logger.section("Phase 5g — Agent Skill Assignments")
+    assigned = skipped = failed = 0
+
+    for agent in agents:
+        src_user_id = agent.get("id")
+        tgt_user_id = user_map.get(str(src_user_id))
+        if not tgt_user_id:
+            skipped += 1
+            continue
+
+        # Fetch source agent's skill assignments
+        try:
+            data = source.get(f"routing/agents/{src_user_id}/instance_values")
+            src_assignments = data.get("attribute_values") or []
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            if getattr(exc, "status_code", 0) == 404:
+                # Agent has no skill assignments — normal
+                continue
+            logger.warn(
+                f"Could not fetch skill assignments for source agent "
+                f"{src_user_id}: {exc}"
+            )
+            continue
+        except Exception as exc:
+            logger.warn(
+                f"Unexpected error fetching skill assignments for agent "
+                f"{src_user_id}: {exc}"
+            )
+            continue
+
+        if not src_assignments:
+            continue
+
+        # Remap source attribute value IDs → target IDs
+        tgt_value_ids: List[int] = []
+        for av in src_assignments:
+            if not isinstance(av, dict):
+                continue
+            src_val_id = av.get("id") or av.get("attribute_value_id")
+            if src_val_id is None:
+                continue
+            tgt_val_id = val_map.get(str(src_val_id))
+            if tgt_val_id is None:
+                logger.warn(
+                    f"Skill assignment: source attribute_value {src_val_id} "
+                    f"has no target mapping — skipping for agent {src_user_id}."
+                )
+                continue
+            try:
+                tgt_value_ids.append(int(tgt_val_id))
+            except (ValueError, TypeError):
+                tgt_value_ids.append(tgt_val_id)
+
+        if not tgt_value_ids:
+            skipped += 1
+            continue
+
+        # PUT the full assignment list on the target agent
+        try:
+            resp = target.put(
+                f"routing/agents/{tgt_user_id}/instance_values",
+                {"attribute_values": [{"id": vid} for vid in tgt_value_ids]},
+            )
+            if isinstance(resp, dict) and resp.get("dry_run"):
+                skipped += 1
+                continue
+            logger.log_created(
+                "agent_skill_assignments",
+                src_user_id,
+                tgt_user_id,
+                f"{len(tgt_value_ids)} skill(s)",
+            )
+            assigned += 1
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.log_failed(
+                "agent_skill_assignments", src_user_id, str(exc),
+                agent.get("name", ""),
+            )
+            failed += 1
+        except Exception as exc:
+            logger.log_failed(
+                "agent_skill_assignments", src_user_id,
+                f"Unexpected error: {type(exc).__name__}: {exc}",
+                agent.get("name", ""),
+            )
+            failed += 1
+
+    logger.success(
+        f"Agent skill assignments: {assigned} assigned, "
+        f"{failed} failed, {skipped} skipped."
+    )

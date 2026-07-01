@@ -9,6 +9,20 @@ Bug fixes vs v1:
     TypeError/ValueError on corrupt map entries.
   - strip_source_fields now also strips positional/internal Zendesk fields
     that cause 422 errors when POSTed verbatim.
+
+Bug fixes vs v2:
+  - user_segment_id and permission_group_id removed from STRIP_FIELDS so
+    they are remapped through FIELD_REMAP_MAP instead of silently dropped,
+    preserving HC access control and edit permissions after migration.
+  - parent_section_id added to FIELD_REMAP_MAP so nested HC sections
+    (subsections) resolve to the correct target parent instead of 422-ing.
+  - SLA filter condition detection broadened to match {field, operator, value}
+    shapes so group_id values inside SLA filters are remapped correctly.
+  - custom_role_id removed from STRIP_FIELDS so Phase 5 can remap agent
+    custom roles; callers that must suppress it (Phases 1-4) pass
+    strip_custom_role=True to strip_source_fields().
+  - suspended removed from STRIP_FIELDS so suspended users are created
+    suspended on the target instead of silently becoming active.
 """
 
 import re
@@ -30,9 +44,12 @@ FIELD_REMAP_MAP: Dict[str, str] = {
     "form_id":             "ticket_forms",
     "organization_id":     "organizations",
     "ticket_form_id":      "ticket_forms",
-    "user_segment_id":     "hc_user_segments",
+    "user_segment_id":     "hc_user_segments",   # Fix P0-L: remap, not strip
+    "permission_group_id": "hc_permission_groups",  # Fix P0-M: remap, not strip
     "category_id":         "hc_categories",
     "section_id":          "hc_sections",
+    "parent_section_id":   "hc_sections",        # Fix P0-U: nested sections
+    "custom_role_id":      "custom_roles",        # Fix P0-A: remap in Phase 5
 }
 
 # Regex to detect custom field keys embedded as condition field names
@@ -51,6 +68,7 @@ CONDITION_VALUE_MAP: Dict[str, str] = {
     "brand_id":            "brands",
     "ticket_form_id":      "ticket_forms",
     "custom_role_id":      "custom_roles",
+    "custom_status_id":    "custom_statuses",  # Fix P2-K: custom ticket statuses
     "category_id":         "hc_categories",
     "section_id":          "hc_sections",
     "user_field_*":        "user_fields",
@@ -71,27 +89,24 @@ STRIP_FIELDS = frozenset({
     "host_mapping",      # brand-specific
     "zendesk_support_address",  # email address tied to source domain
     "owner_id",          # users not migrated — view becomes shared
-    # HC permission / segment IDs are account-scoped and not migrated as their
-    # own resources today. Stripping causes target to assign defaults — safer
-    # than posting source IDs that 400 the request. See remapper docstring.
-    "permission_group_id",
-    "user_segment_id",
     # User-specific read-only / server-managed fields
+    # NOTE: user_segment_id, permission_group_id, custom_role_id, suspended,
+    # and phone are intentionally NOT in this set — they are remapped or
+    # passed through so Phase 5 can apply them correctly.
+    # Callers that must suppress custom_role_id before users exist (Phases
+    # 1-4) pass strip_custom_role=True to strip_source_fields().
     "last_login_at",
     "two_factor_auth_enabled",
-    "shared_phone_number",
-    "shared_agent",
-    "photo",
-    "password",
-    "phone",
-    "identities",
-    "custom_role_id",
-    "moderator",
+    "shared_phone_number",   # read-only computed field (≠ phone)
+    "shared_agent",          # read-only computed field
+    "photo",                 # account-scoped CDN URL — not re-uploadable
+    "password",              # never returned by API
+    "identities",            # separate resource — migrated via _migrate_user_identities
+    "moderator",             # HC-specific, set via separate endpoint
     "only_private_comments",
     "restricted_agent",
-    "suspended",
-    "role_type",
-    "confirmed",
+    "role_type",             # read-only, derived from role
+    "confirmed",             # server-managed
 })
 
 
@@ -136,11 +151,25 @@ def remap_payload(obj: Any, id_map: Dict[str, Dict[str, str]],
 
 
 def _is_condition_item(obj: Dict) -> bool:
-    """Check if a dict looks like a Zendesk condition/action item."""
+    """Check if a dict looks like a Zendesk condition/action item.
+
+    Matches both:
+      - trigger/automation/view conditions: {"field": "...", "value": "..."}
+      - SLA filter conditions:              {"field": "...", "operator": "...", "value": "..."}
+
+    The presence of "operator" does NOT disqualify the item — SLA policies use
+    the same field/value semantics for ID-bearing fields (e.g. group_id) and
+    must have their values remapped just like trigger conditions.
+    """
     return bool(
         isinstance(obj, dict)
         and isinstance(obj.get("field"), str)
         and "value" in obj
+        # Exclude dicts that are clearly not condition items even if they
+        # happen to have "field" and "value" keys (e.g. custom field option
+        # dicts that also carry "name", "position", etc.).  A condition item
+        # never has more than ~4 keys; bail out for very wide dicts.
+        and len(obj) <= 6
     )
 
 
@@ -706,18 +735,26 @@ def sanitize_custom_field_values(values: Any) -> Optional[Dict]:
     return cleaned or None
 
 
-def strip_source_fields(payload: Dict) -> Dict:
+def strip_source_fields(payload: Dict, *, strip_custom_role: bool = False) -> Dict:
     """
     Remove all fields that must not be sent to the target account.
     Also strips any key whose value is exactly the string 'None' —
     which would indicate a corrupt mapping was previously recorded.
+
+    strip_custom_role (default False):
+        When True, also strips 'custom_role_id' from the payload.
+        Pass True in Phases 1-4 where users haven't been migrated yet
+        and the custom_roles id_map category is not yet populated.
+        Phase 5 leaves this False so custom_role_id is remapped correctly.
     """
     if not isinstance(payload, dict):
         return payload
 
+    extra_strip: frozenset = frozenset({"custom_role_id"}) if strip_custom_role else frozenset()
+
     cleaned = {}
     for k, v in payload.items():
-        if k in STRIP_FIELDS:
+        if k in STRIP_FIELDS or k in extra_strip:
             continue
         # Guard against stringified None values from a corrupt id_map
         if v == "None" and k.endswith("_id"):
