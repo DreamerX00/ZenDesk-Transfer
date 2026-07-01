@@ -203,6 +203,10 @@ def run_full_migration(
             summary["cancelled"] = True
             return summary
 
+        # Resolve the phase set early so extract_all can skip sub-exports
+        # that aren't needed (e.g. user identities when Phase 5 is not selected).
+        want = set(phases) if phases is not None else {1, 2, 3, 4, 5}
+
         _emit_phase_start(migration_id, "extract")
         exports = extract_all(source, phases=want)
         summary["phases_run"].append("extract")
@@ -216,8 +220,6 @@ def run_full_migration(
             phase1_foundation, phase2_business_logic,
             phase3_content, phase4_verify, phase5_users,
         )
-
-        want = set(phases) if phases is not None else {1, 2, 3, 4, 5}
         # Phase 3 runs after phase 1 but before phase 2 (mirroring cmd_run).
         ordered: List[tuple] = [
             (1, "1-foundation",       lambda: phase1_foundation.run(source, target, exports)),
