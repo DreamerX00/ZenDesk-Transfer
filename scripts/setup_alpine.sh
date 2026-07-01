@@ -185,6 +185,13 @@ ensure_env_value() {
 # standalone mode must be enabled for the first boot to succeed.
 ensure_env_value "ZDX_STANDALONE_MODE" "1"
 
+# Dev mode allows the standalone session endpoint to accept requests
+# from the Docker bridge IP (172.20.0.x) in addition to loopback.
+# Without this, the browser gets a 403 "standalone access requires
+# loopback" error because Docker routes host→container traffic through
+# the bridge interface, not 127.0.0.1.
+ensure_env_value "ZDX_DEV_MODE" "1"
+
 # ------------------------------------------------------------------
 #  7. Create required directories
 # ------------------------------------------------------------------

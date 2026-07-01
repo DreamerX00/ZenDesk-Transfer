@@ -42,7 +42,7 @@ x-app-common: &app-common
     ZDX_HMAC_SECRET: ${ZDX_HMAC_SECRET:?ZDX_HMAC_SECRET is required}
     ZDX_FERNET_KEY: ${ZDX_FERNET_KEY:?ZDX_FERNET_KEY is required}
     ZDX_REQUIRE_HMAC: "1"
-    ZDX_DEV_MODE: "0"
+    ZDX_DEV_MODE: ${ZDX_DEV_MODE:-0}
     ZDX_STATE_ROOT: /app/state
     ZDX_CONNECTIONS_PATH: /app/state/connections.enc
   volumes: &app-volumes

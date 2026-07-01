@@ -159,8 +159,13 @@ if ($updatedSecrets) {
 
 $dockerEnv = Get-Content "docker\.env" -Raw
 $dockerEnv = Set-EnvValue -Content $dockerEnv -Key "ZDX_STANDALONE_MODE" -Value "1"
+# Dev mode allows the standalone session endpoint to accept requests from the
+# Docker bridge IP (172.20.0.x) in addition to loopback. Without this the
+# browser gets a 403 because Docker routes host→container traffic through the
+# bridge interface, not 127.0.0.1.
+$dockerEnv = Set-EnvValue -Content $dockerEnv -Key "ZDX_DEV_MODE" -Value "1"
 Set-Content "docker\.env" -Value $dockerEnv
-Write-Ok "Configured ZDX_STANDALONE_MODE=1 for local browser access"
+Write-Ok "Configured ZDX_STANDALONE_MODE=1 and ZDX_DEV_MODE=1 for local browser access"
 
 # ------------------------------------------------------------------
 #  7. Create required directories

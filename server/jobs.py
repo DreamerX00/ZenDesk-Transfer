@@ -25,7 +25,7 @@ import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from src.client import ZendeskClient
+from src.client import ZendeskClient, ZendeskAPIError, ZendeskNetworkError
 from src.extractor import extract_all
 from src.formatter import execute as fmt_execute
 from src.utils import logger
