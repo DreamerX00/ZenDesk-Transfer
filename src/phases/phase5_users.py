@@ -278,9 +278,13 @@ def run(
         )
         payload.pop("user_fields", None)
 
-        # Strip null values so Zendesk applies defaults
+        # Preserve null for fields where null has "unset" semantics
+        # (organization_id, default_group_id, custom_role_id).
+        # Strip null from all other fields to avoid 422s on fields
+        # that Zendesk doesn't accept as null.
+        _NULL_UNSET = frozenset({"organization_id", "default_group_id", "custom_role_id"})
         for field in list(payload.keys()):
-            if payload[field] is None:
+            if payload[field] is None and field not in _NULL_UNSET:
                 del payload[field]
 
         if sanitized_user_fields is not None:
@@ -879,7 +883,7 @@ def _migrate_user_identities(
     # Strip fields that are server-managed or account-scoped
     STRIP = frozenset({
         "id", "url", "user_id", "created_at", "updated_at",
-        "verified", "primary", "undeliverable_count",
+        "primary", "undeliverable_count",
         "deliverable_state",
     })
 

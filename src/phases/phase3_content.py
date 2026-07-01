@@ -744,6 +744,20 @@ def _migrate_article_translations(
                 failed += 1
         except ZendeskAPIError as exc:
             if exc.status_code == 422:
+                # Translation may already exist — check the error message first.
+                # Non-duplicate 422s (invalid locale, bad title) should not be
+                # silently retried as PUTs; they'll fail there too.
+                msg = str(exc).lower()
+                if "already" not in msg and "duplicate" not in msg and "exists" not in msg:
+                    logger.log_failed(
+                        "article_translations",
+                        f"{src_article_id}/{locale}",
+                        str(exc),
+                        f"{title} [{locale}]",
+                    )
+                    failed += 1
+                    continue
+
                 # Translation already exists — update it
                 try:
                     resp = target.put(

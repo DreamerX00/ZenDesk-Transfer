@@ -112,6 +112,9 @@ def run(source: ZendeskClient, target: ZendeskClient,
             item.pop("subdomain", None)
             item.pop("host_mapping", None)
             item.pop("help_center_state", None)
+            item.pop("has_help_center", None)
+            item.pop("ticket_form_ids", None)
+            item.pop("signature_template", None)
             brand_name = item.get("name", "brand")
             slug = re.sub(r"[^a-z0-9-]", "", brand_name.lower().replace(" ", "-"))
             slug = slug[:40].strip("-")
@@ -267,6 +270,7 @@ def run(source: ZendeskClient, target: ZendeskClient,
         item.pop("ticket_field_ids", None)
         item.pop("agent_conditions", None)
         item.pop("end_user_conditions", None)
+        item.pop("restricted_brand_ids", None)
         return item
 
     import_resource(

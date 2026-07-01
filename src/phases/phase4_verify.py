@@ -31,6 +31,7 @@ VERIFY_RESOURCES = [
     ("Automations",          "automations",               "automations"),
     ("Macros",               "macros",                    "macros"),
     ("SLA Policies",         "slas/policies",             "sla_policies"),
+    ("Custom Ticket Statuses","custom_statuses",           "custom_statuses"),
     ("Schedules",            "business_hours/schedules",  "schedules"),
     ("Webhooks",             "webhooks",                  "webhooks"),
     ("HC Categories",        "help_center/categories",    "categories"),

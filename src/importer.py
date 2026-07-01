@@ -510,14 +510,23 @@ def import_resource(
                 deactivation_payload["status"] = "inactive"
 
             if needs_deactivation:
-                try:
-                    update_path = update_path_fn(target_id) if update_path_fn else delete_path_fn(target_id)
-                    client.put(update_path, {create_rkey: deactivation_payload})
-                except Exception as exc:
+                if not update_path_fn:
                     logger.warn(
-                        f"Failed to set inactive state for {resource_key} "
-                        f"'{item_name}' (id={target_id}): {exc}"
+                        f"Cannot set inactive state for {resource_key} "
+                        f"'{item_name}' (id={target_id}) — no update_path_fn "
+                        "configured."
                     )
+                else:
+                    try:
+                        client.put(
+                            update_path_fn(target_id),
+                            {create_rkey: deactivation_payload},
+                        )
+                    except Exception as exc:
+                        logger.warn(
+                            f"Failed to set inactive state for {resource_key} "
+                            f"'{item_name}' (id={target_id}): {exc}"
+                        )
 
             # Fix: apply stashed custom_field_options via a POST-create PUT.
             # Zendesk ignores `custom_field_options` on the initial field

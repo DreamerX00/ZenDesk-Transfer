@@ -77,6 +77,7 @@ ALL_RESOURCES_ORDERED = [
     ("triggers",              "triggers/{id}"),
     ("trigger_categories",    "trigger_categories/{id}"),
     ("views",                 "views/{id}"),
+    ("custom_statuses",       "custom_statuses/{id}"),
     # Foundation (least-dependent last)
     ("organizations",         "organizations/{id}"),
     ("ticket_forms",          "ticket_forms/{id}"),

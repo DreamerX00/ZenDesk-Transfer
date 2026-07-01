@@ -44,6 +44,7 @@ FIELD_REMAP_MAP: Dict[str, str] = {
     "form_id":             "ticket_forms",
     "organization_id":     "organizations",
     "ticket_form_id":      "ticket_forms",
+    "default_group_id":    "groups",
     "user_segment_id":     "hc_user_segments",   # Fix P0-L: remap, not strip
     "permission_group_id": "hc_permission_groups",  # Fix P0-M: remap, not strip
     "category_id":         "hc_categories",
@@ -102,9 +103,7 @@ STRIP_FIELDS = frozenset({
     "photo",                 # account-scoped CDN URL — not re-uploadable
     "password",              # never returned by API
     "identities",            # separate resource — migrated via _migrate_user_identities
-    "moderator",             # HC-specific, set via separate endpoint
-    "only_private_comments",
-    "restricted_agent",
+    "restricted_brand_ids",   # read-only on ticket forms — set by brand restrictions
     "role_type",             # read-only, derived from role
     "confirmed",             # server-managed
 })
@@ -160,16 +159,17 @@ def _is_condition_item(obj: Dict) -> bool:
     The presence of "operator" does NOT disqualify the item — SLA policies use
     the same field/value semantics for ID-bearing fields (e.g. group_id) and
     must have their values remapped just like trigger conditions.
+
+    NOTE: there is deliberately NO width guard (e.g. len(obj) <= N) here.
+    Zendesk may add new keys to condition items in future API versions;
+    a narrow width guard would cause ALL conditions to be silently skipped
+    by the remapper, which is far worse than a false-positive match on a
+    non-condition dict that happens to have "field" + "value" keys.
     """
     return bool(
         isinstance(obj, dict)
         and isinstance(obj.get("field"), str)
         and "value" in obj
-        # Exclude dicts that are clearly not condition items even if they
-        # happen to have "field" and "value" keys (e.g. custom field option
-        # dicts that also carry "name", "position", etc.).  A condition item
-        # never has more than ~4 keys; bail out for very wide dicts.
-        and len(obj) <= 6
     )
 
 
@@ -223,10 +223,14 @@ def _remap_condition_item(obj: Dict, id_map: Dict,
         # custom_field values are option texts/tags, not IDs — no value remap
         return obj
 
-    category = CONDITION_VALUE_MAP.get(field)
+    # user_field_<id> conditions use option TEXT as the value (e.g. "VIP"),
+    # not a user field ID. The text must be preserved verbatim — looking it
+    # up in id_map["user_fields"] would always fail (the map holds field
+    # IDs, not option strings) and would cause the condition to be dropped.
+    if field.startswith("user_field_"):
+        return obj
 
-    if category is None and field.startswith("user_field_"):
-        category = "user_fields"
+    category = CONDITION_VALUE_MAP.get(field)
 
     if category is None:
         return obj
@@ -235,7 +239,9 @@ def _remap_condition_item(obj: Dict, id_map: Dict,
         return obj
 
     # Special cases — these values don't need remapping
-    if field == "current_user_id" and str(value) in ("1", "current_user"):
+    if field == "current_user_id" and str(value) in (
+        "1", "current_user", "", "requester_id",
+    ):
         return obj  # literal sentinel, not a real user ID
 
     # Attempt the remap

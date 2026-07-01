@@ -100,6 +100,21 @@ RESTORE_ORDER = [
 SAFE_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$")
 
 
+def _save_backup(path: Path, data: List) -> None:
+    """Atomically write a backup file (temp + rename)."""
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def backup(client: ZendeskClient) -> Optional[Path]:
     """
     Export all user-created resources from the target account into
@@ -509,15 +524,3 @@ def _backup_dynamic_content_variants(
         _save_backup(backup_dir / "dynamic_content_variants.json", all_variants)
         logger.info(f"  Backed up {len(all_variants):>4}  dynamic_content_variants")
     return len(all_variants)
-    """Atomically write a backup file (temp + rename)."""
-    fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        os.replace(tmp_path, path)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise

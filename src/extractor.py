@@ -70,7 +70,7 @@ RESOURCES = [
 # Resources to skip silently if the account plan doesn't support them
 PLAN_GATED = {
     "custom_roles", "group_sla_policies", "routing_attributes",
-    "permission_groups", "custom_statuses",
+    "permission_groups", "custom_statuses", "themes", "articles",
 }
 
 

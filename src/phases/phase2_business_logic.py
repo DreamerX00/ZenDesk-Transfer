@@ -40,6 +40,30 @@ def run(source: ZendeskClient, target: ZendeskClient,
         exports.get("ticket_fields", []),
     )
 
+    # ---- 3.2a  Custom Ticket Statuses -------------------------------- #
+    # Custom statuses are referenced by view/trigger/automation conditions
+    # via the `custom_status_id` field. They must exist on the target
+    # BEFORE views are migrated so that view conditions referencing
+    # custom_status_id can be properly remapped.
+    logger.section("3.2a  Custom Ticket Statuses")
+    if exports.get("custom_statuses"):
+        import_resource(
+            client=target, id_map=id_map,
+            source_items=exports.get("custom_statuses", []),
+            resource_key="custom_statuses",
+            list_path="custom_statuses", list_rkey="custom_statuses",
+            create_path="custom_statuses", create_rkey="custom_status",
+            create_response_rkey="custom_status",
+            delete_path_fn=lambda tid: f"custom_statuses/{tid}",
+            name_field="agent_label",
+            conflict_mode="skip",
+        )
+    else:
+        logger.info(
+            "  No custom ticket statuses in export — skipping. "
+            "(Expected if the source account does not use custom statuses.)"
+        )
+
     # ---- 3.2  Views -------------------------------------------------- #
     logger.section("3.2  Views")
     import_resource(
@@ -60,29 +84,6 @@ def run(source: ZendeskClient, target: ZendeskClient,
         update_path_fn=lambda tid: f"views/{tid}",
         wrap_key="view",
     )
-
-    # ---- 3.2b  Custom Ticket Statuses -------------------------------- #
-    # Custom statuses are referenced by trigger/automation conditions via
-    # the `custom_status_id` field. They must exist on the target before
-    # triggers are migrated so the condition values can be remapped.
-    logger.section("3.2b  Custom Ticket Statuses")
-    if exports.get("custom_statuses"):
-        import_resource(
-            client=target, id_map=id_map,
-            source_items=exports.get("custom_statuses", []),
-            resource_key="custom_statuses",
-            list_path="custom_statuses", list_rkey="custom_statuses",
-            create_path="custom_statuses", create_rkey="custom_status",
-            create_response_rkey="custom_status",
-            delete_path_fn=lambda tid: f"custom_statuses/{tid}",
-            name_field="agent_label",
-            conflict_mode="skip",
-        )
-    else:
-        logger.info(
-            "  No custom ticket statuses in export — skipping. "
-            "(Expected if the source account does not use custom statuses.)"
-        )
 
     # ---- 3.3  Trigger Categories ------------------------------------- #
     logger.section("3.3  Trigger Categories")
@@ -521,9 +522,18 @@ def _assign_form_fields(target: ZendeskClient, id_map: Dict,
 
         source_agent_conds = form.get("agent_conditions")
         source_end_user_conds = form.get("end_user_conditions")
-        has_conditions = (
-            (source_agent_conds is not None and agent_conditions)
-            or (source_end_user_conds is not None and end_user_conditions)
+        source_has_conditions = (
+            source_agent_conds is not None
+            or source_end_user_conds is not None
+        )
+        # has_conditions is True when the source had conditions AND at least
+        # one remapped condition has content, OR the source had an explicit
+        # empty list ([] — meaning "no conditions") which must be sent as [] to
+        # clear any stale conditions left on the target from a previous run.
+        has_conditions = source_has_conditions and (
+            agent_conditions or end_user_conditions
+            or source_agent_conds == []
+            or source_end_user_conds == []
         )
 
         # Fix P1-O: if every source field failed to remap AND there are no
@@ -938,6 +948,19 @@ def _migrate_dynamic_content_variants(
     STRIP = frozenset({"id", "url", "created_at", "updated_at", "item_id",
                        "outdated", "default"})
 
+    # Build locale_id → locale string map for PUT path resolution.
+    # The PUT path requires the locale code (e.g. "en-us"), not the integer ID.
+    _locale_id_to_str: Dict[str, str] = {}
+    try:
+        for loc in target.get_all("locales", "locales"):
+            if isinstance(loc, dict):
+                lid = loc.get("id")
+                lcode = loc.get("locale") or loc.get("code")
+                if lid is not None and lcode:
+                    _locale_id_to_str[str(lid)] = lcode
+    except Exception:
+        pass
+
     created = updated = skipped = failed = 0
     for v in source_variants:
         if not isinstance(v, dict):
@@ -985,7 +1008,7 @@ def _migrate_dynamic_content_variants(
                 # The PUT path requires the locale STRING (e.g. "en-us"), not
                 # the integer locale_id. Using the integer causes a 404 because
                 # Zendesk routes on the locale code, not the numeric ID.
-                put_locale = locale_str or str(locale_id)
+                put_locale = locale_str or _locale_id_to_str.get(str(locale_id))
                 try:
                     resp = target.put(
                         f"dynamic_content/items/{tgt_item_id}/variants/{put_locale}",

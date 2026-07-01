@@ -43,6 +43,7 @@ FORMAT_ORDER = [
     ("Schedules",              "business_hours/schedules",     "schedules",            "business_hours/schedules/{id}",       None),
     ("Routing Attributes",     "routing/attributes",           "attributes",           "routing/attributes/{id}",             None),
     ("Dynamic Content",        "dynamic_content/items",        "items",                "dynamic_content/items/{id}",          None),
+    ("Custom Ticket Statuses", "custom_statuses",              "custom_statuses",      "custom_statuses/{id}",                None),
     ("HC Articles",            "help_center/articles",         "articles",             "help_center/articles/{id}",           None),
     ("HC Sections",            "help_center/sections",         "sections",             "help_center/sections/{id}",           None),
     ("HC Categories",          "help_center/categories",       "categories",           "help_center/categories/{id}",         None),
