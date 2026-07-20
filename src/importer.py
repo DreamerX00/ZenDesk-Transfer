@@ -355,28 +355,32 @@ def import_resource(
                 if conflict_id is not None and source_id is not None:
                     _record_mapping(id_map, resource_key, source_id, conflict_id)
 
-                    # Apply custom_field_options to existing dropdown/checkbox
-                    # fields so their option value strings match the source.
-                    # Without this, conditional form rules
-                    # (agent_conditions/end_user_conditions) that reference
-                    # option values (e.g. value="aws") silently fail on the
-                    # target because the parent field has different or missing
-                    # options.
-                    deferred_options = payload.get("_custom_field_options")
-                    if deferred_options and update_path_fn:
-                        try:
-                            client.put(
-                                update_path_fn(conflict_id),
-                                {create_rkey: {"custom_field_options": deferred_options}},
-                            )
-                        except Exception as exc:
-                            logger.warn(
-                                f"Failed to apply custom_field_options for "
-                                f"existing {resource_key} '{item_name}' "
-                                f"(id={conflict_id}): {exc}. "
-                                "Dropdown/checkbox options on target may "
-                                "not match source."
-                            )
+                    # Apply stashed options (custom_field_options,
+                    # system_field_options, custom_statuses) to existing
+                    # fields — Zendesk ignores these on POST but accepts
+                    # them on a subsequent PUT. Without this, dropdown/
+                    # checkbox/tagger fields on the target have different
+                    # or missing options vs the source.
+                    _DEFERRED_KEYS = {
+                        "_custom_field_options": "custom_field_options",
+                        "_system_field_options": "system_field_options",
+                        "_custom_statuses":      "custom_statuses",
+                    }
+                    for stash_key, api_key in _DEFERRED_KEYS.items():
+                        deferred = payload.get(stash_key)
+                        if deferred and update_path_fn:
+                            try:
+                                client.put(
+                                    update_path_fn(conflict_id),
+                                    {create_rkey: {api_key: deferred}},
+                                )
+                            except Exception as exc:
+                                logger.warn(
+                                    f"Failed to apply {api_key} for "
+                                    f"existing {resource_key} '{item_name}' "
+                                    f"(id={conflict_id}): {exc}. "
+                                    f"Options on target may not match source."
+                                )
 
                     logger.log_skipped(
                         resource_key, source_id,
@@ -528,25 +532,31 @@ def import_resource(
                             f"'{item_name}' (id={target_id}): {exc}"
                         )
 
-            # Fix: apply stashed custom_field_options via a POST-create PUT.
-            # Zendesk ignores `custom_field_options` on the initial field
-            # creation POST but accepts them on a subsequent PUT. Without this,
-            # dropdown and checkbox fields are created with no options, making
-            # them unusable on the target. The options are stashed under the
-            # private key `_custom_field_options` by the pre_process_fn.
-            deferred_options = payload.get("_custom_field_options")
-            if deferred_options and update_path_fn:
-                try:
-                    client.put(
-                        update_path_fn(target_id),
-                        {create_rkey: {"custom_field_options": deferred_options}},
-                    )
-                except Exception as exc:
-                    logger.warn(
-                        f"Failed to apply custom_field_options for {resource_key} "
-                        f"'{item_name}' (id={target_id}): {exc}. "
-                        "Dropdown/checkbox options may be missing on target."
-                    )
+            # Fix: apply stashed custom_field_options, system_field_options,
+            # and custom_statuses via a POST-create PUT. Zendesk ignores all
+            # three on the initial POST but accepts them on a subsequent PUT.
+            # Without this, dropdown/checkbox/tagger/multiselect fields are
+            # created with no options, making them unusable on the target.
+            # The options are stashed under private keys by the pre_process_fn.
+            _DEFERRED_KEYS = {
+                "_custom_field_options": "custom_field_options",
+                "_system_field_options": "system_field_options",
+                "_custom_statuses":      "custom_statuses",
+            }
+            for stash_key, api_key in _DEFERRED_KEYS.items():
+                deferred = payload.get(stash_key)
+                if deferred and update_path_fn:
+                    try:
+                        client.put(
+                            update_path_fn(target_id),
+                            {create_rkey: {api_key: deferred}},
+                        )
+                    except Exception as exc:
+                        logger.warn(
+                            f"Failed to apply {api_key} for {resource_key} "
+                            f"'{item_name}' (id={target_id}): {exc}. "
+                            f"Field options may be missing on target."
+                        )
 
         except (ZendeskAPIError, ZendeskNetworkError) as exc:
             logger.log_failed(resource_key, source_id, str(exc), item_name)

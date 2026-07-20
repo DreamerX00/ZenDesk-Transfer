@@ -54,6 +54,11 @@ def prepare_ticket_field(item: Dict, _id_map: Dict) -> Optional[Dict]:
     _create_one hook can PUT them after the field is created — Zendesk
     ignores options on the initial POST but accepts them on a subsequent PUT.
 
+    system_field_options (e.g. tagger/multiselect field-choice definitions)
+    and custom_statuses are also stashed under `_system_field_options` /
+    `_custom_statuses` so they can be restored after create — they have the
+    same POST-ignores, PUT-accepts limitation as custom_field_options.
+
     Source-specific `id` values in each option are stripped because they
     reference option IDs that do not exist on the target. Sending them
     causes Zendesk to reject the entire options update (422), leaving the
@@ -66,8 +71,9 @@ def prepare_ticket_field(item: Dict, _id_map: Dict) -> Optional[Dict]:
         return None
     item = dict(item)
     options = item.pop("custom_field_options", None)
-    item.pop("system_field_options", None)
-    item.pop("custom_statuses", None)
+    system_options = item.pop("system_field_options", None)
+    custom_statuses = item.pop("custom_statuses", None)
+
     if options:
         cleaned = []
         for opt in options:
@@ -79,6 +85,77 @@ def prepare_ticket_field(item: Dict, _id_map: Dict) -> Optional[Dict]:
             }
             cleaned.append(cleaned_opt)
         item["_custom_field_options"] = cleaned
+
+    if system_options:
+        cleaned = []
+        for opt in system_options:
+            if not isinstance(opt, dict):
+                continue
+            cleaned_opt = {
+                k: v for k, v in opt.items()
+                if k not in ("id", "raw_name", "raw_value")
+            }
+            cleaned.append(cleaned_opt)
+        item["_system_field_options"] = cleaned
+
+    if custom_statuses:
+        cleaned = []
+        for cs in custom_statuses:
+            if not isinstance(cs, dict):
+                continue
+            cleaned_cs = {
+                k: v for k, v in cs.items()
+                if k not in ("id", "url", "created_at", "updated_at")
+            }
+            cleaned.append(cleaned_cs)
+        item["_custom_statuses"] = cleaned
+
+    return item
+
+
+def prepare_user_field(item: Dict, _id_map: Dict) -> Optional[Dict]:
+    """
+    Pre-process user/org fields that use dropdown/checkbox/tagger types.
+
+    Zendesk ignores `custom_field_options` and `system_field_options` on the
+    initial field creation POST but accepts them on a subsequent PUT. We pop
+    them from the payload and stash them under `_custom_field_options` /
+    `_system_field_options` so the importer's _create_one hook can apply them
+    after the field exists on the target.
+
+    Source-specific `id` values in each option are stripped (they reference
+    option IDs that don't exist on the target). Sending them would cause
+    Zendesk to reject the entire options update (422), leaving the field
+    with no options.
+    """
+    item = dict(item)
+
+    options = item.pop("custom_field_options", None)
+    if options:
+        cleaned = []
+        for opt in options:
+            if not isinstance(opt, dict):
+                continue
+            cleaned_opt = {
+                k: v for k, v in opt.items()
+                if k not in ("id", "raw_name", "raw_value")
+            }
+            cleaned.append(cleaned_opt)
+        item["_custom_field_options"] = cleaned
+
+    system_options = item.pop("system_field_options", None)
+    if system_options:
+        cleaned = []
+        for opt in system_options:
+            if not isinstance(opt, dict):
+                continue
+            cleaned_opt = {
+                k: v for k, v in opt.items()
+                if k not in ("id", "raw_name", "raw_value")
+            }
+            cleaned.append(cleaned_opt)
+        item["_system_field_options"] = cleaned
+
     return item
 
 
@@ -224,7 +301,9 @@ def run(source: ZendeskClient, target: ZendeskClient,
         create_path="user_fields", create_rkey="user_field",
         create_response_rkey="user_field",
         delete_path_fn=lambda tid: f"user_fields/{tid}",
+        update_path_fn=lambda tid: f"user_fields/{tid}",
         name_field="key",
+        pre_process_fn=prepare_user_field,
         conflict_mode="skip",
     )
 
@@ -238,7 +317,9 @@ def run(source: ZendeskClient, target: ZendeskClient,
         create_path="organization_fields", create_rkey="organization_field",
         create_response_rkey="organization_field",
         delete_path_fn=lambda tid: f"organization_fields/{tid}",
+        update_path_fn=lambda tid: f"organization_fields/{tid}",
         name_field="key",
+        pre_process_fn=prepare_user_field,
         conflict_mode="skip",
     )
 

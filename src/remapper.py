@@ -293,9 +293,10 @@ def _remap_value(key: str, value: Any, id_map: Dict,
     # Direct field name match
     if key in FIELD_REMAP_MAP and value is not None:
         category = FIELD_REMAP_MAP[key]
-        mapped = _lookup(category, str(value), id_map, context, key)
+        mapped = _lookup(category, str(value), id_map, context, key,
+                         raise_on_miss=False)
         if mapped is None:
-            return value  # _lookup raises on miss; None means raise_on_miss=False
+            return value
         # Safe int conversion — validate mapped is a digit string before int()
         if isinstance(mapped, str) and mapped.isdigit():
             return int(mapped)
