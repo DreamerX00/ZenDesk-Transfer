@@ -86,6 +86,12 @@ def prepare_ticket_field(item: Dict, _id_map: Dict) -> Optional[Dict]:
                 if k not in ("id", "raw_name", "raw_value")
             }
             cleaned.append(cleaned_opt)
+        # Include options AT create — dropdown/tagger/multiselect fields are
+        # rejected with "Field options: must contain at least one option" if
+        # created empty. (Source option `id`s are already stripped above, which
+        # was the reason options were originally deferred.) Also stash them so
+        # the post-create PUT re-applies as an idempotent fallback.
+        item["custom_field_options"] = cleaned
         item["_custom_field_options"] = cleaned
 
     if system_options:
@@ -143,6 +149,9 @@ def prepare_user_field(item: Dict, _id_map: Dict) -> Optional[Dict]:
                 if k not in ("id", "raw_name", "raw_value")
             }
             cleaned.append(cleaned_opt)
+        # Include at create (dropdown/tagger user/org fields require options)
+        # AND stash for the idempotent post-create PUT fallback.
+        item["custom_field_options"] = cleaned
         item["_custom_field_options"] = cleaned
 
     system_options = item.pop("system_field_options", None)

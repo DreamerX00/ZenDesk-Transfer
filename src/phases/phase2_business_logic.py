@@ -707,40 +707,70 @@ def _remap_webhook_subscriptions(payload: Dict, id_map: Dict) -> Dict:
 
 def _scrub_webhook_secret(item: Dict, _id_map: Dict) -> Optional[Dict]:
     """
-    Webhook signing secrets cannot be read from the API.
-    Remove signing_secret so Zendesk generates a new one on creation.
-    The new secret will be logged and must be updated on the receiving endpoint.
+    Webhook secrets cannot be read from the source API. For an EXACT copy we
+    still want the webhook to exist on the target so triggers/automations that
+    notify it can be created and reference it — so instead of skipping webhooks
+    whose credentials are write-only, we recreate them with PLACEHOLDER
+    credentials and flag them MANUAL for the operator to fix.
 
-    Also handles write-only auth credentials (bearer_token, basic_auth, api_key)
-    which Zendesk does not return — these webhooks must be migrated manually.
+    - signing_secret: removed so Zendesk mints a fresh one on create.
+    - bearer_token / basic_auth / api_key: the write-only secret isn't
+      returned, so any missing required field is filled with a placeholder.
+      Zendesk validates the auth STRUCTURE at create time (hence the old
+      approach 422'd / skipped); a well-formed placeholder passes and leaves a
+      working, wired-up webhook that just needs its real secret swapped in.
     """
     item = dict(item)
     item.pop("signing_secret", None)
     webhook_name = item.get("name", "<unnamed>")
 
-    # Check authentication type — some credentials are write-only
-    auth = item.get("authentication") or {}
+    auth = item.get("authentication")
     if not isinstance(auth, dict):
         auth = {}
     auth_type = auth.get("type", "signing_secret")
-    auth_data = auth.get("data") or {}
+    auth_data = auth.get("data") if isinstance(auth.get("data"), dict) else {}
 
-    WRITE_ONLY_AUTH_TYPES = ("bearer_token", "basic_auth", "api_key")
+    _PLACEHOLDER = "PLACEHOLDER_UPDATE_ME"
+    # Required data fields per auth type; identifier-ish fields get a benign
+    # placeholder, secrets get the loud PLACEHOLDER_UPDATE_ME sentinel.
+    _REQUIRED = {
+        "bearer_token": {"token": _PLACEHOLDER},
+        "basic_auth":   {"username": "placeholder", "password": _PLACEHOLDER},
+        "api_key":      {"name": "X-API-Key", "value": _PLACEHOLDER},
+    }
 
-    if auth_type in WRITE_ONLY_AUTH_TYPES and not auth_data:
+    if auth_type in _REQUIRED:
+        data = dict(auth_data)
+        used_placeholder = False
+        for field, default in _REQUIRED[auth_type].items():
+            if not data.get(field):
+                data[field] = default
+                if default == _PLACEHOLDER:
+                    used_placeholder = True
+        new_auth = dict(auth)
+        new_auth["data"] = data
+        item["authentication"] = new_auth
+        if used_placeholder:
+            logger.log_manual(
+                "webhook",
+                f"Webhook '{webhook_name}' uses '{auth_type}' auth whose secret "
+                "is write-only and could not be read from the source. It was "
+                f"created with a PLACEHOLDER credential ('{_PLACEHOLDER}') so "
+                "triggers can reference it — replace it with the real secret in "
+                "the target account."
+            )
+        else:
+            logger.log_manual(
+                "webhook",
+                f"Webhook '{webhook_name}' migrated with its returned '{auth_type}' "
+                "auth. Verify the credential in the target account."
+            )
+    else:
         logger.log_manual(
             "webhook",
-            f"Webhook '{webhook_name}' uses '{auth_type}' authentication "
-            "whose credentials are write-only and were not returned by the "
-            "API. Create this webhook manually in the target account."
+            f"Webhook '{webhook_name}' will receive a NEW signing secret. "
+            "Update your endpoint's validation logic accordingly."
         )
-        return None  # signal importer to skip this item
-
-    logger.log_manual(
-        "webhook",
-        f"Webhook '{webhook_name}' will receive a NEW signing secret. "
-        "Update your endpoint's validation logic accordingly."
-    )
     return item
 
 

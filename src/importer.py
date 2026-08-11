@@ -27,7 +27,9 @@ from typing import Any, Callable, Dict, List, Optional
 from src.client import ZendeskClient, ZendeskAPIError, ZendeskNetworkError
 from src.remapper import remap_payload, strip_source_fields, RemapError
 from src.utils import logger
-from src.utils.runctx import current_migration_id, state_dir as _ctx_state_dir
+from src.utils.runctx import (
+    current_migration_id, event_sink, state_dir as _ctx_state_dir,
+)
 
 # Legacy module-level paths. Kept for backwards compatibility with
 # callers in main.py that import them directly (`from src.importer
@@ -670,8 +672,21 @@ def import_resource(
             _create_one(job)
         return
 
+    # ThreadPoolExecutor worker threads do NOT inherit the caller's
+    # ContextVars, so without re-binding them every per-item CREATED/FAILED
+    # event (and the SSE sink) would resolve to the legacy state dir — i.e.
+    # vanish from the per-migration report and the live UI stream. Capture the
+    # current run context and re-bind it once per worker thread via the pool
+    # initializer so parallel creates log to the right place.
+    _mid = current_migration_id.get()
+    _sink = event_sink.get()
+
+    def _bind_ctx() -> None:
+        current_migration_id.set(_mid)
+        event_sink.set(_sink)
+
     from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    with ThreadPoolExecutor(max_workers=workers, initializer=_bind_ctx) as pool:
         # list() forces all submissions to enqueue (no laziness) and waits
         # for every result. Exceptions inside _create_one are caught there,
         # so map() won't propagate.
