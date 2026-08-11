@@ -75,7 +75,7 @@ for candidate in python3 python; do
         ver=$("$candidate" --version 2>&1 | awk '{print $2}')
         major=$(echo "$ver" | cut -d. -f1)
         minor=$(echo "$ver" | cut -d. -f2)
-        if [ "$major" -ge 3 ] && [ "$minor" -ge 10 ]; then
+        if [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -ge 10 ]; }; then
             PYTHON="$candidate"
             break
         fi

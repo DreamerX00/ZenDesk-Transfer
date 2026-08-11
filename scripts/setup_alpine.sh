@@ -37,7 +37,21 @@ if command -v docker >/dev/null 2>&1; then
     log_ok "Docker already installed: $(docker --version)"
 else
     log_warn "Docker not found. Installing docker from community repo…"
-    echo "@community https://dl-cdn.alpinelinux.org/alpine/edge/community" | sudo tee -a /etc/apk/repositories
+    # Docker lives in Alpine's `community` repo. Enable it for THIS release —
+    # a tagged `@community` repo is ignored unless each package name carries the
+    # tag (so `apk add docker` from it silently fails), and pinning `edge` on a
+    # stable install can pull incompatible libc/libs. Add the matching-release
+    # community repo, idempotently, falling back to edge only if the release is
+    # unknown.
+    alpine_ver="$(. /etc/os-release 2>/dev/null && echo "${VERSION_ID:-}")"
+    if [ -n "$alpine_ver" ] && [ "$alpine_ver" != "${alpine_ver%.*}" ]; then
+        community_repo="https://dl-cdn.alpinelinux.org/alpine/v${alpine_ver%.*}/community"
+    else
+        community_repo="https://dl-cdn.alpinelinux.org/alpine/edge/community"
+    fi
+    if ! grep -qxF "$community_repo" /etc/apk/repositories 2>/dev/null; then
+        echo "$community_repo" | sudo tee -a /etc/apk/repositories >/dev/null
+    fi
     sudo apk update
     sudo apk add docker docker-cli-compose
     sudo adduser "$USER" docker
@@ -81,7 +95,7 @@ for candidate in python3 python; do
         ver=$("$candidate" --version 2>&1 | awk '{print $2}')
         major=$(echo "$ver" | cut -d. -f1)
         minor=$(echo "$ver" | cut -d. -f2)
-        if [ "$major" -ge 3 ] && [ "$minor" -ge 10 ]; then
+        if [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -ge 10 ]; }; then
             PYTHON="$candidate"
             break
         fi

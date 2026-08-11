@@ -57,9 +57,23 @@ try {
 #  3. Python 3.10+
 # ------------------------------------------------------------------
 Write-Info "Checking Python..."
-$python = Get-Command python -ErrorAction SilentlyContinue
-if (-not $python) {
-    Write-Info "Python not found. Downloading Python 3.12..."
+
+function Test-PythonOk {
+    # True only if `python` exists AND is >= 3.10. Also rejects the Windows
+    # Store `python` alias stub (it prints nothing / opens the Store, so the
+    # version parse fails and we fall through to a real install).
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) { return $false }
+    try {
+        $raw = (python --version 2>&1) -replace '^Python\s+', ''
+        $v = [version]($raw -replace '(\d+\.\d+(\.\d+)?).*', '$1')
+        return ($v.Major -gt 3) -or ($v.Major -eq 3 -and $v.Minor -ge 10)
+    } catch {
+        return $false
+    }
+}
+
+if (-not (Test-PythonOk)) {
+    Write-Info "Python 3.10+ not found. Downloading Python 3.12..."
     $installer = "$env:TEMP\python-installer.exe"
     Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.9/python-3.12.9-amd64.exe" -OutFile $installer
     Start-Process -Wait -FilePath $installer -ArgumentList "/quiet", "InstallAllUsers=1", "PrependPath=1"

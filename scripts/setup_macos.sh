@@ -94,7 +94,7 @@ for candidate in python3 python; do
         ver=$("$candidate" --version 2>&1 | awk '{print $2}')
         major=$(echo "$ver" | cut -d. -f1)
         minor=$(echo "$ver" | cut -d. -f2)
-        if [ "$major" -ge 3 ] && [ "$minor" -ge 10 ]; then
+        if [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -ge 10 ]; }; then
             PYTHON="$candidate"
             break
         fi
@@ -106,7 +106,14 @@ if [ -n "$PYTHON" ]; then
 else
     log_warn "Python 3.10+ not found. Installing via Homebrew…"
     brew install python@3.12
-    PYTHON="python3"
+    # brew's versioned formula guarantees `python3.12` on PATH but not
+    # necessarily a `python3` shim — and a bare `python3` may resolve to
+    # macOS's system Python 3.9, building the venv with the wrong interpreter.
+    if command -v python3.12 >/dev/null 2>&1; then
+        PYTHON="python3.12"
+    else
+        PYTHON="python3"
+    fi
     log_ok "Python $($PYTHON --version) installed"
 fi
 
