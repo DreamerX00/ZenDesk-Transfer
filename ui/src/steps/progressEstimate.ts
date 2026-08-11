@@ -9,17 +9,27 @@
  *   3. Use the events the worker already publishes — don't add new
  *      backend coordination just for a progress bar.
  *
+ * One model, two readouts:
+ *   - `progressFraction` (the % bar) is the single source of truth:
+ *     weighted phase completion, monotonic left→right.
+ *   - `etaSec` (time left) is DERIVED from that same fraction and the
+ *     real elapsed time: at fraction f after E seconds the average pace
+ *     projects total = E / f, so remaining = E · (1 − f) / f. The bar and
+ *     the ETA therefore always agree by construction (50 % after 2 min ⇒
+ *     2 min left), and the ETA self-corrects to the account's actual
+ *     shape instead of trusting a fixed per-phase calibration.
+ *
  * Why this is honest:
  *   - elapsed is wall-clock arithmetic on the timestamps the worker
  *     already writes (`started_at`, `phase_started_at`, `finished_at`)
- *   - in-phase ETA is `remaining / observed_items_per_sec`, computed
- *     only when we have ≥10 item-completion events spanning ≥5 s —
- *     below that, throughput is dominated by warmup noise and
- *     produces wildly swinging numbers
- *   - remaining-phases ETA is scaled by historical phase weights
- *     measured on a representative migration; we apply them as a
- *     multiplier on the current phase's pace, so unrealistic source
- *     sizes scale honestly rather than reporting a fixed minutes count
+ *   - the fraction only advances on real signal: items_done/items_total
+ *     for item phases, and a bounded time-asymptote for non-item phases
+ *     (extract / format / verify) that never fakes 100 %
+ *   - fraction and ETA are shown together or not at all — we never draw a
+ *     bar we can't put an honest "time left" under
+ *   - both stay null (UI shows "Estimating…") until a phase has settled
+ *     and, for item phases, produced ≥10 completions over ≥5 s, so we
+ *     never divide by a warmup-noise fraction
  */
 
 import type { LogRecord } from "../types";
@@ -53,16 +63,23 @@ export const PHASE_ORDER = [
 
 const MIN_ITEMS_FOR_ETA = 10;
 const MIN_TIMESPAN_MS_FOR_ETA = 5_000;
-/** Don't show any ETA until at least this many seconds into the phase —
- *  prevents showing a bogus number immediately after phase transitions. */
+/** Don't show a fraction/ETA until at least this many seconds into the phase —
+ *  prevents a bogus number immediately after phase transitions. */
 const MIN_PHASE_ELAPSED_SEC_FOR_ETA = 10;
+/** e-folding time (seconds) for the non-item within-phase creep. The bar
+ *  approaches, but never reaches, the phase's weight cap over ~this long. */
+const NON_ITEM_PHASE_TIME_CONSTANT_SEC = 20;
 
 export interface Estimate {
   /** Seconds since the job started (always available once running). */
   totalElapsedSec: number | null;
   /** Seconds since the current phase started. */
   phaseElapsedSec: number | null;
-  /** Best-effort remaining seconds for the whole job, or null if too noisy. */
+  /**
+   * Best-effort remaining seconds for the whole job, or null if too noisy.
+   * Derived from `progressFraction`: remaining = elapsed · (1 − f) / f, so it
+   * is always consistent with the % bar. Non-null iff `progressFraction` is.
+   */
   etaSec: number | null;
   /** Completed items/sec observed during the current phase (debug + UI). */
   itemsPerSec: number | null;
@@ -140,133 +157,90 @@ export function computeEstimate({
   const phaseElapsedSec = parseElapsed(status.phase_started_at, status.finished_at, now);
   const phase = status.phase || "";
 
+  // Shared "no estimate yet" shape — both fraction and ETA null together.
+  const idle: Estimate = {
+    totalElapsedSec,
+    phaseElapsedSec,
+    etaSec: null,
+    itemsPerSec: null,
+    reason: null,
+    progressFraction: null,
+  };
+
   // Terminal states: stop estimating, just report what happened.
-  if (phase === "completed" || phase === "failed" || phase === "cancelled") {
-    return {
-      totalElapsedSec,
-      phaseElapsedSec,
-      etaSec: 0,
-      itemsPerSec: null,
-      reason: null,
-      // Completed jobs are 100% full; failed/cancelled leave the bar where
-      // it was (null → UI keeps the last fill / shows "stopped").
-      progressFraction: phase === "completed" ? 1 : null,
-    };
+  if (phase === "completed") {
+    return { ...idle, etaSec: 0, progressFraction: 1 };
+  }
+  if (phase === "failed" || phase === "cancelled") {
+    // Leave the bar where it was (null → UI keeps the last fill / "stopped").
+    return idle;
   }
 
   // Need at least a phase-start timestamp to compute anything useful.
   if (phaseElapsedSec === null || phase === "starting" || !phase) {
-    return {
-      totalElapsedSec,
-      phaseElapsedSec,
-      etaSec: null,
-      itemsPerSec: null,
-      reason: "Waiting for the first phase to start.",
-      progressFraction: null,
-    };
+    return { ...idle, reason: "Waiting for the first phase to start." };
   }
 
-  // Don't show any ETA in the first N seconds — the numbers are too
-  // noisy and will swing wildly as the phase ramps up.
+  // Settling guard: the fraction is too noisy in the first seconds of a
+  // phase — hold the bar rather than show a number that immediately jumps.
   if (phaseElapsedSec < MIN_PHASE_ELAPSED_SEC_FOR_ETA) {
-    return {
-      totalElapsedSec,
-      phaseElapsedSec,
-      etaSec: null,
-      itemsPerSec: null,
-      reason: "Just started — settling in…",
-      progressFraction: null,
-    };
+    return { ...idle, reason: "Just started — settling in…" };
   }
 
-  // How many items does this phase intend to process? extracted_<r>
-  // gives us per-resource totals; sum the ones relevant to the phase.
+  // ---- within-phase progress: the one honest signal per phase ---------- //
   const phaseTotal = expectedItemsForPhase(phase, status);
+  let withinPhase: number;
+  let itemsPerSec: number | null = null;
 
-  // Non-item phases such as extract / format-target / verify have no
-  // honest per-item denominator. Project total job time from how long
-  // we've already spent in this phase relative to its weight.
   if (phaseTotal === null) {
-    const phaseWeight = PHASE_WEIGHTS[phase] ?? 0.05;
-    // elapsed / weight = projected total job time. Subtract elapsed to
-    // get remaining for this phase. Floor at 5 s to avoid looking stuck.
-    const projectedTotalSec = phaseElapsedSec / phaseWeight;
-    const phaseRemainingSec = Math.max(projectedTotalSec - phaseElapsedSec, 5);
-    const remainingWeight = sumRemainingPhaseWeights(phase, selectedPhases);
-    const otherPhasesSec = projectedTotalSec * remainingWeight;
-
-    const etaSec = Math.max(phaseRemainingSec + otherPhasesSec, 0);
-    // Within-phase progress for a non-item phase (extract / format / verify):
-    // there is no item denominator and a time projection is self-referential
-    // (it cancels out, leaving a flat bar). Use a bounded asymptotic creep
-    // 1 - 1/(1 + elapsed/T): strictly increasing with elapsed, starts at 0,
-    // approaches (but never reaches) 1. T is the e-folding time in seconds.
-    const NON_ITEM_PHASE_TIME_CONSTANT_SEC = 20;
-    const withinPhase = 1 - 1 / (1 + phaseElapsedSec / NON_ITEM_PHASE_TIME_CONSTANT_SEC);
-    return {
-      totalElapsedSec,
-      phaseElapsedSec,
-      etaSec,
-      itemsPerSec: null,
-      reason: null,
-      progressFraction: fractionFromPhaseWeights(phase, withinPhase, selectedPhases),
-    };
+    // Non-item phase (extract / format-target / verify): no item denominator.
+    // Bounded asymptotic creep 1 - 1/(1 + elapsed/T): strictly increasing,
+    // starts at 0, approaches but never reaches 1 — so the bar advances
+    // without ever faking completion.
+    withinPhase = 1 - 1 / (1 + phaseElapsedSec / NON_ITEM_PHASE_TIME_CONSTANT_SEC);
+  } else {
+    // Item phase: items_done / items_total, but only once we have a real
+    // throughput baseline (≥MIN_ITEMS completions over ≥MIN_TIMESPAN). Only
+    // completions emitted AFTER phase_started_at count, so we don't average
+    // across phases or double-count nested work (attachments, labels).
+    const phaseStartMs = Date.parse(status.phase_started_at ?? "");
+    const progress = getPhaseProgressEvents(events, phaseStartMs, phase);
+    if (progress.length < MIN_ITEMS_FOR_ETA) {
+      return {
+        ...idle,
+        reason: `Estimating… (${progress.length}/${MIN_ITEMS_FOR_ETA} items processed)`,
+      };
+    }
+    const firstTs = Date.parse(progress[0].ts);
+    const lastTs = Date.parse(progress[progress.length - 1].ts);
+    const spanMs = Math.max(lastTs - firstTs, 0);
+    if (spanMs < MIN_TIMESPAN_MS_FOR_ETA) {
+      return { ...idle, reason: "Estimating… (collecting throughput baseline)" };
+    }
+    itemsPerSec = progress.length / (spanMs / 1000);
+    withinPhase = phaseTotal > 0 ? Math.min(1, progress.length / phaseTotal) : 0;
   }
 
-  // Throughput inside the current phase — only completed main-resource
-  // events emitted AFTER phase_started_at count, otherwise we'd average
-  // across phases or double-count nested work like attachments.
-  const phaseStartMs = Date.parse(status.phase_started_at ?? "");
-  const phaseProgressEvents = getPhaseProgressEvents(events, phaseStartMs, phase);
-  if (phaseProgressEvents.length < MIN_ITEMS_FOR_ETA) {
-    return {
-      totalElapsedSec,
-      phaseElapsedSec,
-      etaSec: null,
-      itemsPerSec: null,
-      reason: `Estimating… (${phaseProgressEvents.length}/${MIN_ITEMS_FOR_ETA} items processed)`,
-      progressFraction: null,
-    };
+  // ---- overall completion fraction: the single source of truth --------- //
+  const progressFraction = fractionFromPhaseWeights(phase, withinPhase, selectedPhases);
+  if (progressFraction === null || progressFraction <= 0) {
+    return { ...idle, itemsPerSec, reason: "Estimating…" };
   }
 
-  const firstTs = Date.parse(phaseProgressEvents[0].ts);
-  const lastTs = Date.parse(phaseProgressEvents[phaseProgressEvents.length - 1].ts);
-  const spanMs = Math.max(lastTs - firstTs, 0);
-  if (spanMs < MIN_TIMESPAN_MS_FOR_ETA) {
-    return {
-      totalElapsedSec,
-      phaseElapsedSec,
-      etaSec: null,
-      itemsPerSec: null,
-      reason: "Estimating… (collecting throughput baseline)",
-      progressFraction: null,
-    };
-  }
-  const itemsPerSec = phaseProgressEvents.length / (spanMs / 1000);
-  const phaseDone = phaseProgressEvents.length;
-  const phaseRemainingSec = phaseTotal > phaseDone ? (phaseTotal - phaseDone) / itemsPerSec : 0;
+  // ---- ETA derived FROM that fraction (self-correcting, consistent) ---- //
+  // remaining = elapsed · (1 − f) / f. This makes "time left" agree with the
+  // bar by construction and adapt to the account's real pace, instead of
+  // extrapolating one phase's throughput across the others via fixed weights.
+  const elapsed = totalElapsedSec ?? phaseElapsedSec;
+  const etaSec = Math.max((elapsed * (1 - progressFraction)) / progressFraction, 0);
 
-  // Remaining phases: scale the current phase's elapsed by the weight
-  // ratio. If we know phase-A took 60 s at weight 0.10 and phase-B is
-  // weight 0.50, phase-B will take ~300 s.
-  const phaseWeight = PHASE_WEIGHTS[phase] ?? 0.1;
-  const phasePerWeightSec = ((phaseElapsedSec ?? 0) + phaseRemainingSec) / phaseWeight;
-
-  const remainingWeight = sumRemainingPhaseWeights(phase, selectedPhases);
-  const otherPhasesSec = phasePerWeightSec * remainingWeight;
-
-  const etaSec = Math.max(phaseRemainingSec + otherPhasesSec, 0);
-  // Within-phase progress for an item phase: items done / items expected.
-  // This is the most honest signal and is strictly monotonic as items
-  // complete.
-  const withinPhase = phaseTotal > 0 ? phaseDone / phaseTotal : 0;
   return {
     totalElapsedSec,
     phaseElapsedSec,
     etaSec,
     itemsPerSec,
     reason: null,
-    progressFraction: fractionFromPhaseWeights(phase, withinPhase, selectedPhases),
+    progressFraction,
   };
 }
 
@@ -394,21 +368,6 @@ const PHASE_PROGRESS_RESOURCES: Record<string, readonly string[]> = {
   ],
   "5-users": ["users"],
 };
-
-function sumRemainingPhaseWeights(
-  currentPhase: string,
-  selectedPhases?: ReadonlySet<string>,
-): number {
-  const idx = PHASE_ORDER.indexOf(currentPhase as (typeof PHASE_ORDER)[number]);
-  if (idx === -1) return 0;
-  let sum = 0;
-  for (let i = idx + 1; i < PHASE_ORDER.length; i += 1) {
-    const ph = PHASE_ORDER[i];
-    if (selectedPhases && selectedPhases.size > 0 && !selectedPhases.has(ph)) continue;
-    sum += PHASE_WEIGHTS[ph] ?? 0;
-  }
-  return sum;
-}
 
 /** Format a number of seconds as "Xh Ym Zs" / "Ym Zs" / "Xs". */
 export function formatDuration(secs: number | null): string {
