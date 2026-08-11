@@ -279,6 +279,31 @@ curl http://localhost:8080/api/v1/health
 | **4 — Verify** | Cross-account comparison | Reports & validation |
 | **5 — Users** | User accounts (all roles) | Identity migration |
 
+Ordering (**position**) and status (**active / draft / suspended**) are
+preserved for every resource above via a post-create restore pass, and Phase 4
+now verifies order and status per object — not just counts.
+
+### ⚠️ What is NOT migrated
+
+This is a **configuration** transfer, so transactional data is out of scope by
+design: **tickets, comments, attachments, ticket tags, satisfaction ratings,
+and ticket audits/history**. Per-agent personal views/macros are also excluded.
+
+Known configuration gaps (a full clone would also need these — they are
+**not** currently exported or imported):
+
+- Support/recipient email addresses (brands migrate; their inbound addresses don't)
+- Account, Guide, Talk, Chat, and Messaging settings
+- Brand logos / non-live Guide theme assets
+- Custom objects & custom object records
+- Apps & app installations (Marketplace + private), and their settings
+- Legacy targets / extensions (webhooks **are** migrated)
+- Side conversations
+- Social (OAuth) user identities — require the user to re-authorize
+
+Anything the tool cannot copy exactly is surfaced in the migration report’s
+**Manual Action Required** section, so a run is never silently incomplete.
+
 ---
 
 ## 🏗 Architecture

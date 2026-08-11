@@ -24,7 +24,7 @@ from typing import Callable, Dict, List, Optional
 
 from src.client import ZendeskClient, ZendeskAPIError, ZendeskNetworkError
 from src.extractor import EXPORTS_DIR
-from src.importer import load_id_map, _record_mapping
+from src.importer import load_id_map, _record_mapping, restore_positions
 from src.remapper import strip_source_fields, remap_payload, RemapError
 from src.utils import logger
 
@@ -82,9 +82,12 @@ def run(source: ZendeskClient, target: ZendeskClient,
 
     # ---- 4.1.2  Sections --------------------------------------------- #
     logger.section("4.1.2  Help Center Sections")
+    # Order parents before children: parent_section_id is remapped at create
+    # time, so a nested subsection created before its parent would 422/drop.
+    _sorted_sections = _topo_sort_sections(exports.get("sections", []))
     _import_hc_resource(
         client=target, id_map=id_map,
-        source_items=exports.get("sections", []),
+        source_items=_sorted_sections,
         resource_key="hc_sections",
         create_path="help_center/sections",
         create_rkey="section",
@@ -103,6 +106,15 @@ def run(source: ZendeskClient, target: ZendeskClient,
     # ---- 4.1.3  Articles --------------------------------------------- #
     logger.section("4.1.3  Help Center Articles (with labels & attachments)")
     _import_articles(source, target, id_map, exports.get("articles", []))
+
+    # Zendesk ignores `position` on article create — restore per-section order.
+    logger.section("4.1.3b  Article Ordering")
+    restore_positions(
+        target, id_map, exports.get("articles", []),
+        resource_key="hc_articles", id_map_key="hc_articles",
+        update_path_fn=lambda tid: f"help_center/articles/{tid}",
+        wrap_key="article",
+    )
 
     # ---- 4.1.4  Article Translations --------------------------------- #
     # Non-default-locale translations are migrated after all articles exist
@@ -376,6 +388,44 @@ def _import_user_segments(target: ZendeskClient, id_map: Dict,
 #  Articles (with attachment re-upload)                               #
 # ------------------------------------------------------------------ #
 
+def _topo_sort_sections(sections: List[Dict]) -> List[Dict]:
+    """
+    Order sections so every parent section precedes its children.
+
+    HC `parent_section_id` is remapped to the target parent at create time, so
+    a child created before its parent has no mapping yet and is dropped. Roots
+    are sections whose parent is a category (not in this set) or None. Cycles
+    (shouldn't occur in HC) are broken by a `visiting` guard.
+    """
+    by_id: Dict[str, Dict] = {
+        str(s.get("id")): s
+        for s in sections
+        if isinstance(s, dict) and s.get("id") is not None
+    }
+    emitted: set = set()
+    visiting: set = set()
+    ordered: List[Dict] = []
+
+    def emit(s: Dict) -> None:
+        sid = str(s.get("id"))
+        if sid in emitted or sid in visiting:
+            return
+        visiting.add(sid)
+        parent = s.get("parent_section_id")
+        if parent is not None and str(parent) in by_id:
+            emit(by_id[str(parent)])
+        visiting.discard(sid)
+        emitted.add(sid)
+        ordered.append(s)
+
+    for s in sections:
+        if isinstance(s, dict) and s.get("id") is not None:
+            emit(s)
+        else:
+            ordered.append(s)  # keep malformed items in place; importer skips them
+    return ordered
+
+
 def _import_articles(source: ZendeskClient, target: ZendeskClient,
                      id_map: Dict, articles: List[Dict]) -> None:
     section_map = id_map.get("hc_sections", {})
@@ -423,6 +473,27 @@ def _import_articles(source: ZendeskClient, target: ZendeskClient,
 
         payload["section_id"] = int(target_section_id)
         payload.pop("author_id", None)  # use admin as fallback author; reassigned in Phase 5
+
+        # Articles never pass through the generic remap_payload, so their
+        # access-control references still hold SOURCE ids. Remap the two that
+        # matter to target ids; drop (and surface) any that didn't migrate so
+        # the create doesn't 422 on a dead id.
+        for _fld, _cat in (("permission_group_id", "hc_permission_groups"),
+                           ("user_segment_id", "hc_user_segments")):
+            _raw = payload.get(_fld)
+            if _raw is None:
+                continue
+            _mapped = id_map.get(_cat, {}).get(str(_raw))
+            if _mapped:
+                payload[_fld] = int(_mapped) if str(_mapped).isdigit() else _mapped
+            else:
+                payload.pop(_fld, None)
+                logger.log_manual(
+                    "hc_articles",
+                    f"Article '{title}': {_fld}={_raw} was not migrated — "
+                    "dropped so the article could be created; its access may "
+                    "differ from source. Set it manually in the target.",
+                )
 
         # Preserve draft state: if the source article was NOT a draft, ensure
         # the target article is published. Zendesk creates articles as drafts

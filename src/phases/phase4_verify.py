@@ -43,6 +43,25 @@ VERIFY_RESOURCES = [
     ("Organization Memberships", "organization_memberships",  "organization_memberships"),
 ]
 
+# Resources where a count match is NOT enough: order (position) and/or status
+# (active/draft) must also match the source for a true exact copy. We match
+# source→target objects by a stable name/key and compare position ORDER
+# (relative sequence, robust to system items occupying fixed target slots) and
+# the status field. (label, api_path, rkey, name_field, status_field|None)
+DEEP_VERIFY = [
+    ("Ticket Fields",  "ticket_fields",            "ticket_fields",       "title", "active"),
+    ("Ticket Forms",   "ticket_forms",             "ticket_forms",        "name",  "active"),
+    ("User Fields",    "user_fields",              "user_fields",         "key",   "active"),
+    ("Org Fields",     "organization_fields",      "organization_fields", "key",   "active"),
+    ("Views",          "views",                    "views",               "title", "active"),
+    ("Triggers",       "triggers",                 "triggers",            "title", "active"),
+    ("Automations",    "automations",              "automations",         "title", "active"),
+    ("Macros",         "macros",                   "macros",              "title", "active"),
+    ("SLA Policies",   "slas/policies",            "sla_policies",        "title", None),
+    ("HC Sections",    "help_center/sections",     "sections",            "name",  None),
+    ("HC Articles",    "help_center/articles",     "articles",            "title", "draft"),
+]
+
 _SENTINEL_ERR = object()  # unique sentinel — not equal to any string
 
 
@@ -78,12 +97,104 @@ def run(source: ZendeskClient, target: ZendeskClient) -> None:
         ["Resource", "Source", "Target", "Match"],
     )
 
+    # Per-object content/order/status comparison — a count match alone can hide
+    # wrong order, wrong status, or entirely different objects that happen to
+    # tally the same.
+    deep_rows, deep_ok = _deep_verify(source, target)
+    logger.print_table(
+        "Content, Order & Status Verification",
+        deep_rows,
+        ["Resource", "Matched", "Missing", "Status≠", "Order"],
+    )
+
+    # Aggregate pass/fail gate — a count ❌/ERR or any deep mismatch fails the
+    # whole verification so a wrong migration cannot end on a green "complete".
+    count_ok = all(r["Match"] == "✅" for r in rows)
+    overall_ok = count_ok and deep_ok
+
     try:
-        _generate_report(rows)
-        logger.success(f"Verification complete. Report → {state_dir() / 'migration_report.md'}")
+        _generate_report(rows, deep_rows, overall_ok)
     except Exception as exc:
         logger.warn(f"Could not write migration report: {exc}")
-        logger.success("Verification complete (report write failed — see warning above).")
+
+    if overall_ok:
+        logger.success(
+            f"Verification PASSED — counts, order and status match source. "
+            f"Report → {state_dir() / 'migration_report.md'}"
+        )
+    else:
+        logger.warn(
+            "Verification FAILED — the target is NOT yet an exact copy. See the "
+            "Content/Order/Status table above and the MANUAL/FAILED sections of "
+            f"the report → {state_dir() / 'migration_report.md'}"
+        )
+
+
+def _deep_verify(source: ZendeskClient, target: ZendeskClient):
+    """
+    For each ordered/status-bearing resource, match source→target objects by
+    name/key and check: all present, status equal, and relative position order
+    preserved. Returns (rows, all_ok).
+
+    Order is compared as a RELATIVE sequence of the objects present in both
+    accounts (not absolute position numbers) so fixed system slots on the
+    target don't cause false failures.
+    """
+    findings: List[Dict] = []
+    all_ok = True
+
+    for label, api_path, rkey, name_field, status_field in DEEP_VERIFY:
+        try:
+            src_items = source.list_resource(api_path, rkey)
+            tgt_items = target.list_resource(api_path, rkey)
+        except (ZendeskAPIError, ZendeskNetworkError, Exception):
+            findings.append({
+                "Resource": label, "Matched": "ERR", "Missing": "ERR",
+                "Status≠": "ERR", "Order": "⚠ ERR",
+            })
+            all_ok = False
+            continue
+
+        tgt_by_name = {
+            i.get(name_field): i
+            for i in tgt_items
+            if isinstance(i, dict) and i.get(name_field)
+        }
+
+        matched = missing = status_mismatch = 0
+        common = []  # (name, src_position, tgt_position) for order comparison
+        for s in src_items:
+            if not isinstance(s, dict):
+                continue
+            name = s.get(name_field)
+            if not name:
+                continue
+            t = tgt_by_name.get(name)
+            if t is None:
+                missing += 1
+                continue
+            matched += 1
+            if status_field and s.get(status_field) != t.get(status_field):
+                status_mismatch += 1
+            s_pos, t_pos = s.get("position"), t.get("position")
+            if s_pos is not None and t_pos is not None:
+                common.append((name, s_pos, t_pos))
+
+        src_seq = [n for (n, sp, tp) in sorted(common, key=lambda x: (x[1], x[0]))]
+        tgt_seq = [n for (n, sp, tp) in sorted(common, key=lambda x: (x[2], x[0]))]
+        order_ok = src_seq == tgt_seq
+
+        res_ok = missing == 0 and status_mismatch == 0 and order_ok
+        all_ok = all_ok and res_ok
+        findings.append({
+            "Resource": label,
+            "Matched": str(matched),
+            "Missing": str(missing),
+            "Status≠": str(status_mismatch) if status_field else "—",
+            "Order": "✅" if order_ok else "❌",
+        })
+
+    return findings, all_ok
 
 
 def _count(client: ZendeskClient, path: str, rkey: str):
@@ -100,7 +211,10 @@ def _count(client: ZendeskClient, path: str, rkey: str):
         return _SENTINEL_ERR
 
 
-def _generate_report(count_rows: List[Dict]) -> None:
+def _generate_report(count_rows: List[Dict],
+                     deep_rows: List[Dict] = None,
+                     overall_ok: bool = None) -> None:
+    deep_rows = deep_rows or []
     log_entries = _read_log()
     stats: Dict[str, int] = defaultdict(int)
     for entry in log_entries:
@@ -113,8 +227,11 @@ def _generate_report(count_rows: List[Dict]) -> None:
     purged_items = [e for e in log_entries if e.get("action") == "PURGED"]
     skipped_items = [e for e in log_entries if e.get("action") == "SKIPPED"]
 
-    lines = [
-        "# Zendesk Migration Report\n",
+    lines = ["# Zendesk Migration Report\n"]
+    if overall_ok is not None:
+        verdict = "✅ PASS — exact copy" if overall_ok else "❌ FAIL — not an exact copy"
+        lines.append(f"**Verification result: {verdict}**\n")
+    lines += [
         "## Summary\n",
         "| Action  | Count |",
         "|---------|-------|",
@@ -131,6 +248,21 @@ def _generate_report(count_rows: List[Dict]) -> None:
         lines.append(
             f"| {row['Resource']} | {row['Source']} | {row['Target']} | {row['Match']} |"
         )
+
+    if deep_rows:
+        lines += [
+            "\n## Content, Order & Status Verification\n",
+            "Matched = objects found on both by name/key · Missing = on source but "
+            "not target · Status≠ = active/draft differs · Order = relative "
+            "position preserved.\n",
+            "| Resource | Matched | Missing | Status≠ | Order |",
+            "|----------|---------|---------|---------|-------|",
+        ]
+        for row in deep_rows:
+            lines.append(
+                f"| {row['Resource']} | {row['Matched']} | {row['Missing']} "
+                f"| {row['Status≠']} | {row['Order']} |"
+            )
 
     if skipped_items:
         lines += ["\n## Skipped Resources (conflict — not imported)\n"]

@@ -18,7 +18,7 @@ Bug fixes vs v1:
 from typing import Dict, List, Optional
 
 from src.client import ZendeskClient, ZendeskAPIError, ZendeskNetworkError
-from src.importer import import_resource, load_id_map
+from src.importer import import_resource, load_id_map, restore_positions
 from src.remapper import (
     remap_form_conditions,
     remap_macro_actions,
@@ -78,7 +78,7 @@ def run(source: ZendeskClient, target: ZendeskClient,
         conflict_mode="replace",
     )
     logger.section("3.2c  View Ordering")
-    _restore_rule_positions(
+    restore_positions(
         target, id_map, exports.get("views", []),
         resource_key="views", id_map_key="views",
         update_path_fn=lambda tid: f"views/{tid}",
@@ -113,7 +113,7 @@ def run(source: ZendeskClient, target: ZendeskClient,
         conflict_mode="replace",
     )
     logger.section("3.4b  Trigger Ordering")
-    _restore_rule_positions(
+    restore_positions(
         target, id_map, exports.get("triggers", []),
         resource_key="triggers", id_map_key="triggers",
         update_path_fn=lambda tid: f"triggers/{tid}",
@@ -134,7 +134,7 @@ def run(source: ZendeskClient, target: ZendeskClient,
         conflict_mode="replace",
     )
     logger.section("3.5b  Automation Ordering")
-    _restore_rule_positions(
+    restore_positions(
         target, id_map, exports.get("automations", []),
         resource_key="automations", id_map_key="automations",
         update_path_fn=lambda tid: f"automations/{tid}",
@@ -155,6 +155,13 @@ def run(source: ZendeskClient, target: ZendeskClient,
         post_process_fn=_assign_macro_actions,
         conflict_mode="replace",
     )
+    logger.section("3.6b  Macro Ordering")
+    restore_positions(
+        target, id_map, exports.get("macros", []),
+        resource_key="macros", id_map_key="macros",
+        update_path_fn=lambda tid: f"macros/{tid}",
+        wrap_key="macro",
+    )
 
     # ---- 3.7  SLA Policies ------------------------------------------- #
     logger.section("3.7  SLA Policies")
@@ -167,6 +174,14 @@ def run(source: ZendeskClient, target: ZendeskClient,
         create_response_rkey="sla_policy",
         delete_path_fn=lambda tid: f"slas/policies/{tid}",
         conflict_mode="replace",
+    )
+    # SLA policies are matched top-down by position — order changes behavior.
+    logger.section("3.7b  SLA Policy Ordering")
+    restore_positions(
+        target, id_map, exports.get("sla_policies", []),
+        resource_key="sla_policies", id_map_key="sla_policies",
+        update_path_fn=lambda tid: f"slas/policies/{tid}",
+        wrap_key="sla_policy",
     )
 
     # ---- 3.8  Group SLA Policies (Enterprise) ------------------------ #
@@ -281,75 +296,6 @@ def run(source: ZendeskClient, target: ZendeskClient,
     flush_id_map(id_map)
     logger.success("Phase 3 — Business Logic complete.")
     return id_map
-
-
-def _restore_rule_positions(
-    target: ZendeskClient,
-    id_map: Dict,
-    source_items: List[Dict],
-    *,
-    resource_key: str,
-    id_map_key: str,
-    update_path_fn,
-    wrap_key: str,
-) -> None:
-    """
-    Restore `position` ordering for views, triggers, and automations.
-
-    Zendesk assigns positions by insertion order on create. After all items
-    of a type exist on the target, we PUT each item's position so the
-    execution/display order matches the source exactly.
-
-    Only items with an explicit `position` value that were successfully
-    migrated (present in id_map) are updated.
-    """
-    resource_map = id_map.get(id_map_key, {})
-    if not isinstance(resource_map, dict) or not source_items:
-        return
-
-    updated = skipped = failed = 0
-    for item in source_items:
-        if not isinstance(item, dict):
-            continue
-        src_id = item.get("id")
-        position = item.get("position")
-        if position is None:
-            continue
-        tgt_id = resource_map.get(str(src_id))
-        if not tgt_id:
-            skipped += 1
-            continue
-        try:
-            resp = target.put(
-                update_path_fn(tgt_id),
-                {wrap_key: {"position": int(position)}},
-            )
-            if isinstance(resp, dict) and resp.get("dry_run"):
-                skipped += 1
-                continue
-            updated += 1
-        except (ZendeskAPIError, ZendeskNetworkError) as exc:
-            logger.log_failed(
-                f"{resource_key}_position", src_id,
-                f"Failed to set position={position}: {exc}",
-                item.get("title") or item.get("name", ""),
-            )
-            failed += 1
-        except Exception as exc:
-            logger.log_failed(
-                f"{resource_key}_position", src_id,
-                f"Unexpected error: {type(exc).__name__}: {exc}",
-                item.get("title") or item.get("name", ""),
-            )
-            failed += 1
-
-    if updated or failed:
-        logger.success(
-            f"{resource_key} positions: {updated} updated, "
-            f"{failed} failed, {skipped} skipped."
-        )
-    else:
-        logger.info(f"  No {resource_key} positions to restore.")
 
 
 def _scan_subdomain_references(

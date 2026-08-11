@@ -216,6 +216,79 @@ def _atexit_flush() -> None:
 #  Generic import driver                                              #
 # ------------------------------------------------------------------ #
 
+def restore_positions(
+    target: ZendeskClient,
+    id_map: Dict,
+    source_items: List[Dict],
+    *,
+    id_map_key: str,
+    update_path_fn: Callable[[Any], str],
+    wrap_key: str,
+    resource_key: Optional[str] = None,
+) -> None:
+    """
+    Restore `position` ordering for a resource family after all items exist.
+
+    Zendesk ignores `position` on create and assigns order by insertion, so the
+    only way to reproduce the source order is a second pass that PUTs each
+    item's `position`. This one helper covers every ordered resource
+    (ticket/user/org fields, forms, macros, SLA policies, rules, HC items) —
+    the create path already handled `active`/status; this handles order.
+
+    Only items with an explicit `position` that were successfully migrated
+    (present in id_map[id_map_key]) are updated; the rest are skipped. Source
+    system items (not in id_map) are naturally skipped, so custom items keep
+    their correct relative order even when the target has fixed system slots.
+    """
+    resource_key = resource_key or id_map_key
+    resource_map = id_map.get(id_map_key, {})
+    if not isinstance(resource_map, dict) or not source_items:
+        return
+
+    updated = skipped = failed = 0
+    for item in source_items:
+        if not isinstance(item, dict):
+            continue
+        src_id = item.get("id")
+        position = item.get("position")
+        if position is None:
+            continue
+        tgt_id = resource_map.get(str(src_id))
+        if not tgt_id:
+            skipped += 1
+            continue
+        label = item.get("title") or item.get("name") or item.get("agent_label") or ""
+        try:
+            resp = target.put(
+                update_path_fn(tgt_id),
+                {wrap_key: {"position": int(position)}},
+            )
+            if isinstance(resp, dict) and resp.get("dry_run"):
+                skipped += 1
+                continue
+            updated += 1
+        except (ZendeskAPIError, ZendeskNetworkError) as exc:
+            logger.log_failed(
+                f"{resource_key}_position", src_id,
+                f"Failed to set position={position}: {exc}", label,
+            )
+            failed += 1
+        except Exception as exc:
+            logger.log_failed(
+                f"{resource_key}_position", src_id,
+                f"Unexpected error: {type(exc).__name__}: {exc}", label,
+            )
+            failed += 1
+
+    if updated or failed:
+        logger.success(
+            f"{resource_key} positions: {updated} updated, "
+            f"{failed} failed, {skipped} skipped."
+        )
+    else:
+        logger.info(f"  No {resource_key} positions to restore.")
+
+
 def import_resource(
     *,
     client: ZendeskClient,
@@ -380,6 +453,29 @@ def import_resource(
                                     f"existing {resource_key} '{item_name}' "
                                     f"(id={conflict_id}): {exc}. "
                                     f"Options on target may not match source."
+                                )
+
+                    # Converge active/status on the EXISTING target item to
+                    # match source, so re-runs against a pre-populated target
+                    # end up an exact copy (order already converges via the
+                    # restore_positions pass). Only PUT on an actual mismatch.
+                    if update_path_fn:
+                        want = {}
+                        if (payload.get("active") is not None
+                                and conflict.get("active") != payload.get("active")):
+                            want["active"] = payload["active"]
+                        if (payload.get("status") in ("active", "inactive")
+                                and conflict.get("status") != payload.get("status")):
+                            want["status"] = payload["status"]
+                        if want:
+                            try:
+                                client.put(update_path_fn(conflict_id),
+                                           {create_rkey: want})
+                            except Exception as exc:
+                                logger.warn(
+                                    f"Failed to converge status for existing "
+                                    f"{resource_key} '{item_name}' "
+                                    f"(id={conflict_id}): {exc}"
                                 )
 
                     logger.log_skipped(

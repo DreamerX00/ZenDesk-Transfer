@@ -12,6 +12,72 @@ from src.remapper import (
 )
 from src.utils import logger
 
+# Attributes safe to push onto a PRE-EXISTING target user (email collision).
+# Deliberately excludes role / custom_role_id / verified / suspended: changing
+# those on the account owner or a seeded admin could lock the account, so a
+# difference there is surfaced as MANUAL instead of applied automatically.
+_SAFE_RECONCILE_KEYS = frozenset({
+    "name", "notes", "details", "alias", "signature",
+    "tags", "locale", "locale_id", "time_zone", "organization_id",
+})
+
+
+def _reconcile_existing_user(target: ZendeskClient, id_map: Dict,
+                             source_user: Dict, target_user: Dict,
+                             name: str) -> None:
+    """
+    Make a pre-existing target user (matched by email) match the source for the
+    SAFE profile attributes, so the owner/admins that already exist become
+    copies too instead of keeping their target-side values. Role/verified/
+    suspension are never changed here — a role difference is logged as MANUAL.
+    """
+    tgt_id = target_user.get("id")
+    if tgt_id is None:
+        return
+    try:
+        payload = strip_source_fields(source_user)
+        payload = remap_payload(payload, id_map, context=f"users:{name}")
+    except RemapError as exc:
+        logger.warn(f"Could not reconcile existing user '{name}': {exc}")
+        return
+    except Exception as exc:
+        logger.warn(f"Could not reconcile existing user '{name}': {exc}")
+        return
+
+    safe = {
+        k: payload[k]
+        for k in _SAFE_RECONCILE_KEYS
+        if payload.get(k) is not None
+    }
+    user_fields = sanitize_custom_field_values(source_user.get("user_fields"))
+    if user_fields:
+        safe["user_fields"] = user_fields
+
+    src_role = source_user.get("role")
+    if src_role and src_role != target_user.get("role"):
+        logger.log_manual(
+            "users",
+            f"User '{name}' has role '{src_role}' on source but "
+            f"'{target_user.get('role')}' on target — NOT changed automatically "
+            "(could affect account owner/admin access). Adjust manually if the "
+            "role must match.",
+        )
+
+    if not safe:
+        return
+    try:
+        resp = target.put(f"users/{tgt_id}", {"user": safe})
+        if isinstance(resp, dict) and resp.get("dry_run"):
+            return
+        logger.log_created(
+            "users", source_user.get("id"), tgt_id,
+            f"{name} (reconciled existing)",
+        )
+    except (ZendeskAPIError, ZendeskNetworkError) as exc:
+        logger.warn(
+            f"Failed to reconcile existing user '{name}' (id={tgt_id}): {exc}"
+        )
+
 BATCH_SIZE = 100
 
 # When more than this many users would be created in a single migration
@@ -238,10 +304,14 @@ def run(
             conflict_id = conflict.get("id")
             if conflict_id is not None and source_id is not None:
                 _record_mapping(id_map, "users", source_id, conflict_id)
+                # Reconcile SAFE profile attributes onto the existing target
+                # user so pre-existing accounts (owner, seeded admins) become
+                # copies too — instead of keeping their target-side values.
+                _reconcile_existing_user(target, id_map, user, conflict, name)
             logger.log_skipped(
                 "users", source_id,
                 f"Email '{email}' already exists in target "
-                f"(id={conflict_id}) — mapped for membership/identity migration"
+                f"(id={conflict_id}) — mapped + profile reconciled"
             )
             skipped += 1
             continue
@@ -290,7 +360,17 @@ def run(
         if sanitized_user_fields is not None:
             payload["user_fields"] = sanitized_user_fields
 
-        # Suppress verification/welcome email
+        # Suppress verification/welcome email. Forcing verified=True is a
+        # deliberate safety choice (a False would trigger a verification email
+        # to a real person), but it diverges from a source-unverified user, so
+        # surface that so it isn't a silent status change.
+        if user.get("verified") is not True:
+            logger.log_manual(
+                "users",
+                f"User '{name}' was NOT verified on source but is created "
+                "verified on target (to avoid sending a verification email). "
+                "Adjust manually if the unverified state must be preserved.",
+            )
         payload["verified"] = True
 
         queued.append({
@@ -472,8 +552,147 @@ def run(
     # are left as the target default (admin / shared), logged as MANUAL.
     _reassign_view_owners(target, id_map, exports.get("views", []))
     _reassign_article_authors(target, id_map, exports.get("articles", []))
+    # Rules were created before users existed, so restrictions referencing a
+    # User were dropped (rule went public) and user-valued conditions kept
+    # stale source IDs. Now that users are migrated, restore both.
+    _restore_rule_restrictions(target, id_map, exports)
+    _restore_rule_user_conditions(target, id_map, exports)
 
     flush_id_map(id_map)
+
+
+# Rule families that carry a `restriction` (personal/group visibility) and/or
+# user-valued conditions. (export_key, id_map_key, wrap_key, path_fn)
+_RULE_TARGETS = [
+    ("views",       "views",       "view",       lambda t: f"views/{t}"),
+    ("triggers",    "triggers",    "trigger",    lambda t: f"triggers/{t}"),
+    ("automations", "automations", "automation", lambda t: f"automations/{t}"),
+    ("macros",      "macros",      "macro",      lambda t: f"macros/{t}"),
+]
+
+_USER_REF_FIELDS = frozenset({"assignee_id", "requester_id", "current_user_id"})
+
+
+def _restore_rule_restrictions(target: ZendeskClient, id_map: Dict,
+                               exports: Dict[str, List[Dict]]) -> None:
+    """
+    Re-apply each rule's `restriction` now that users exist.
+
+    In Phase 2 a User restriction was stripped (users weren't migrated yet), so
+    a personal view/macro became public. Group restrictions already resolved
+    then; re-applying them here is idempotent. Restrictions whose target user/
+    group didn't migrate are surfaced as MANUAL.
+    """
+    for export_key, id_map_key, wrap_key, path_fn in _RULE_TARGETS:
+        items = exports.get(export_key, [])
+        rmap = id_map.get(id_map_key)
+        if not isinstance(rmap, dict) or not items:
+            continue
+        restored = skipped = failed = 0
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            restr = it.get("restriction")
+            if not isinstance(restr, dict):
+                continue
+            rtype, rid = restr.get("type"), restr.get("id")
+            if rid is None or rtype not in ("Group", "User"):
+                continue
+            tgt_item = rmap.get(str(it.get("id")))
+            if not tgt_item:
+                continue
+            cat = "groups" if rtype == "Group" else "users"
+            tgt_ref = id_map.get(cat, {}).get(str(rid))
+            if not tgt_ref:
+                logger.log_manual(
+                    export_key,
+                    f"'{it.get('title', it.get('id'))}' was restricted to "
+                    f"{cat[:-1]} {rid} which was not migrated — the rule is "
+                    "unrestricted on target. Re-apply the restriction manually.",
+                )
+                skipped += 1
+                continue
+            new_restr = {"type": rtype,
+                         "id": int(tgt_ref) if str(tgt_ref).isdigit() else tgt_ref}
+            try:
+                resp = target.put(path_fn(tgt_item),
+                                  {wrap_key: {"restriction": new_restr}})
+                if isinstance(resp, dict) and resp.get("dry_run"):
+                    skipped += 1
+                    continue
+                restored += 1
+            except (ZendeskAPIError, ZendeskNetworkError) as exc:
+                logger.log_failed(f"{export_key}_restriction", it.get("id"), str(exc))
+                failed += 1
+        if restored or failed:
+            logger.success(
+                f"{export_key} restrictions: {restored} restored, "
+                f"{failed} failed, {skipped} skipped."
+            )
+
+
+def _iter_rule_condition_items(item: Dict):
+    """Yield the {field,value} dicts from a rule's conditions (all/any) + actions."""
+    conds = item.get("conditions")
+    if isinstance(conds, dict):
+        for key in ("all", "any"):
+            for c in (conds.get(key) or []):
+                if isinstance(c, dict):
+                    yield c
+    for a in (item.get("actions") or []):
+        if isinstance(a, dict):
+            yield a
+
+
+def _restore_rule_user_conditions(target: ZendeskClient, id_map: Dict,
+                                  exports: Dict[str, List[Dict]]) -> None:
+    """
+    Re-remap user-valued conditions/actions (assignee/requester/current_user)
+    that kept stale SOURCE user IDs because Phase 2 ran before users existed.
+
+    Only rules that actually reference a user are touched. Conditions/actions
+    are re-derived from the source with the now-complete id_map and PUT back,
+    so the correct target user IDs land in place.
+    """
+    if "users" not in id_map:
+        return
+    for export_key, id_map_key, wrap_key, path_fn in _RULE_TARGETS:
+        if export_key == "macros":
+            continue  # macro actions are handled by their own remap in Phase 2
+        items = exports.get(export_key, [])
+        rmap = id_map.get(id_map_key)
+        if not isinstance(rmap, dict) or not items:
+            continue
+        fixed = failed = 0
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            if not any(c.get("field") in _USER_REF_FIELDS
+                       for c in _iter_rule_condition_items(it)):
+                continue
+            tgt = rmap.get(str(it.get("id")))
+            if not tgt:
+                continue
+            ctx = f"{export_key}:{it.get('title', it.get('id'))}"
+            body: Dict = {}
+            if isinstance(it.get("conditions"), dict):
+                body["conditions"] = remap_payload(it["conditions"], id_map, context=ctx)
+            if isinstance(it.get("actions"), list):
+                body["actions"] = remap_payload(it["actions"], id_map, context=ctx)
+            if not body:
+                continue
+            try:
+                resp = target.put(path_fn(tgt), {wrap_key: body})
+                if isinstance(resp, dict) and resp.get("dry_run"):
+                    continue
+                fixed += 1
+            except (ZendeskAPIError, ZendeskNetworkError) as exc:
+                logger.log_failed(f"{export_key}_user_refs", it.get("id"), str(exc))
+                failed += 1
+        if fixed or failed:
+            logger.success(
+                f"{export_key} user-ref conditions: {fixed} fixed, {failed} failed."
+            )
 
 
 def _reassign_view_owners(

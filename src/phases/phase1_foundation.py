@@ -14,7 +14,9 @@ import re
 from typing import Dict, List, Optional
 
 from src.client import ZendeskClient, ZendeskAPIError, ZendeskNetworkError
-from src.importer import import_resource, load_id_map, _record_mapping
+from src.importer import (
+    import_resource, load_id_map, _record_mapping, restore_positions,
+)
 from src.remapper import (
     strip_source_fields,
     remap_payload,
@@ -290,6 +292,13 @@ def run(source: ZendeskClient, target: ZendeskClient,
         skip_system=False,  # handled by pre_process_fn above
         conflict_mode="skip",
     )
+    # Zendesk ignores `position` on create — restore the source field order.
+    restore_positions(
+        target, id_map, exports.get("ticket_fields", []),
+        id_map_key="ticket_fields",
+        update_path_fn=lambda tid: f"ticket_fields/{tid}",
+        wrap_key="ticket_field",
+    )
 
     # ---- 2.4  User Fields -------------------------------------------- #
     logger.section("2.4  User Fields")
@@ -306,6 +315,12 @@ def run(source: ZendeskClient, target: ZendeskClient,
         pre_process_fn=prepare_user_field,
         conflict_mode="skip",
     )
+    restore_positions(
+        target, id_map, exports.get("user_fields", []),
+        id_map_key="user_fields",
+        update_path_fn=lambda tid: f"user_fields/{tid}",
+        wrap_key="user_field",
+    )
 
     # ---- 2.5  Organization Fields ------------------------------------ #
     logger.section("2.5  Organization Fields")
@@ -321,6 +336,12 @@ def run(source: ZendeskClient, target: ZendeskClient,
         name_field="key",
         pre_process_fn=prepare_user_field,
         conflict_mode="skip",
+    )
+    restore_positions(
+        target, id_map, exports.get("organization_fields", []),
+        id_map_key="organization_fields",
+        update_path_fn=lambda tid: f"organization_fields/{tid}",
+        wrap_key="organization_field",
     )
 
     # ---- 2.6  Custom Roles (Enterprise only) ------------------------- #
@@ -364,6 +385,12 @@ def run(source: ZendeskClient, target: ZendeskClient,
         delete_path_fn=lambda tid: f"ticket_forms/{tid}",
         pre_process_fn=_strip_form_field_ids,
         conflict_mode="skip",
+    )
+    restore_positions(
+        target, id_map, exports.get("ticket_forms", []),
+        id_map_key="ticket_forms",
+        update_path_fn=lambda tid: f"ticket_forms/{tid}",
+        wrap_key="ticket_form",
     )
 
     # ---- 2.8  Organizations (batched) -------------------------------- #

@@ -51,6 +51,7 @@ FIELD_REMAP_MAP: Dict[str, str] = {
     "section_id":          "hc_sections",
     "parent_section_id":   "hc_sections",        # Fix P0-U: nested sections
     "custom_role_id":      "custom_roles",        # Fix P0-A: remap in Phase 5
+    "schedule_id":         "schedules",           # SLA/automation business-hours ref
 }
 
 # Regex to detect custom field keys embedded as condition field names
@@ -74,6 +75,20 @@ CONDITION_VALUE_MAP: Dict[str, str] = {
     "section_id":          "hc_sections",
     "user_field_*":        "user_fields",
     "ticket_type_id":      None,      # system field — no remapping needed
+}
+
+# Trigger/automation NOTIFICATION actions carry the target resource ID as the
+# FIRST element of a list value, e.g.
+#   {"field": "notification_webhook", "value": ["<webhook_id>", subject, body]}
+#   {"field": "notification_group",   "value": ["<group_id>", subject, body]}
+# The scalar CONDITION_VALUE_MAP path can't reach these because `value` is a
+# list. Map the field → the id_map category of value[0]. (notification_target
+# is intentionally absent: legacy targets are not migrated by this tool, so a
+# target reference is surfaced as MANUAL rather than silently remapped.)
+ACTION_LIST_ID_MAP: Dict[str, str] = {
+    "notification_webhook":   "webhooks",
+    "notification_group":     "groups",
+    "notification_sms_group": "groups",
 }
 
 # Maximum recursion depth for payload walking (guard against deeply nested payloads)
@@ -117,7 +132,13 @@ def remap_payload(obj: Any, id_map: Dict[str, Dict[str, str]],
                   context: str = "", _depth: int = 0) -> Any:
     """
     Recursively walk obj (dict or list) and remap all known ID fields.
-    Raises RemapError if a required ID is missing from id_map.
+
+    NOTE: every call site uses raise_on_miss=False, so a missing mapping does
+    NOT raise here — depending on the field it either drops the condition/
+    action/restriction or leaves the source ID unchanged. Each such miss is
+    logged as a MANUAL item so it surfaces in the report instead of silently
+    changing behaviour. (RemapError is still defined and used by strip/lookup
+    helpers that opt into raise_on_miss=True.)
     Respects MAX_DEPTH to prevent stack overflow on adversarial payloads.
     """
     if _depth > MAX_DEPTH:
@@ -219,6 +240,11 @@ def _remap_condition_item(obj: Dict, id_map: Dict,
                 f"Stripping condition/action referencing non-migrated "
                 f"ticket field (field='{field}', context='{context}')"
             )
+            logger.log_manual(
+                context or field,
+                f"Condition/action on non-migrated ticket field '{field}' "
+                "was dropped — rule logic changed. Verify the rule in target.",
+            )
             return None
         # custom_field values are option texts/tags, not IDs — no value remap
         return obj
@@ -228,6 +254,29 @@ def _remap_condition_item(obj: Dict, id_map: Dict,
     # up in id_map["user_fields"] would always fail (the map holds field
     # IDs, not option strings) and would cause the condition to be dropped.
     if field.startswith("user_field_"):
+        return obj
+
+    # --- Notification actions whose value is [id, subject, body] ------------ #
+    list_cat = ACTION_LIST_ID_MAP.get(field)
+    if list_cat is not None and isinstance(value, list) and value:
+        raw_id = value[0]
+        mapped = _lookup(list_cat, str(raw_id), id_map, context, field,
+                         raise_on_miss=False)
+        if mapped is None:
+            # The webhook/group this notification targets wasn't migrated.
+            # Dropping the action avoids a 422 that would fail the whole rule,
+            # but the operator must re-add it — surface it, don't hide it.
+            logger.log_manual(
+                context or field,
+                f"Notification action '{field}' references "
+                f"{list_cat}[{raw_id}] which was not migrated — action dropped. "
+                "Re-add it in the target account.",
+            )
+            return None
+        obj = dict(obj)
+        new_value = list(value)
+        new_value[0] = str(mapped)
+        obj["value"] = new_value
         return obj
 
     category = CONDITION_VALUE_MAP.get(field)
@@ -273,6 +322,12 @@ def _remap_condition_item(obj: Dict, id_map: Dict,
             f"Stripping condition/action referencing non-migrated user "
             f"(field='{field}', value='{value}', context='{context}')"
         )
+        logger.log_manual(
+            context or field,
+            f"Condition/action referencing non-migrated user "
+            f"(field='{field}', value='{value}') was dropped — rule logic "
+            "changed. Re-check this rule in the target.",
+        )
         return None
     else:
         # Mapping miss for a non-user reference (e.g. a deleted group or org
@@ -282,6 +337,12 @@ def _remap_condition_item(obj: Dict, id_map: Dict,
         logger.warn(
             f"Stripping condition/action referencing missing "
             f"{category}[{value}] (field='{field}', context='{context}')"
+        )
+        logger.log_manual(
+            context or field,
+            f"Condition/action referencing missing {category}[{value}] "
+            f"(field='{field}') was dropped — rule logic changed. "
+            "Re-check this rule in the target.",
         )
         return None
 
@@ -296,6 +357,15 @@ def _remap_value(key: str, value: Any, id_map: Dict,
         mapped = _lookup(category, str(value), id_map, context, key,
                          raise_on_miss=False)
         if mapped is None:
+            # No target mapping — the source ID is left in place, which will
+            # 422 or point at a coincidental target resource. Surface it so it
+            # isn't a silent wrong value.
+            logger.log_manual(
+                context or key,
+                f"Field '{key}' references {category}[{value}] which was not "
+                "migrated — the source ID was left unchanged and may be wrong "
+                "on the target. Fix it manually.",
+            )
             return value
         # Safe int conversion — validate mapped is a digit string before int()
         if isinstance(mapped, str) and mapped.isdigit():
@@ -341,6 +411,12 @@ def _remap_value(key: str, value: Any, id_map: Dict,
                     f"Stripping view restriction that references "
                     f"non-existent {cat[:-1]} {restriction_id} "
                     f"(context: {context})"
+                )
+                logger.log_manual(
+                    context or "restriction",
+                    f"Restriction on {cat[:-1]} {restriction_id} was dropped — "
+                    "the rule/view is now unrestricted (visible to everyone). "
+                    "Re-apply the restriction in the target.",
                 )
                 return None
 
